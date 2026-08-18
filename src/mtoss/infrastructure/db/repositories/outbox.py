@@ -37,3 +37,6 @@ class OutboxRepository:
         record.published_at = datetime.now(UTC)
         await self.session.flush()
         await self.session.commit()
+
+    async def rollback(self) -> None:
+        await self.session.rollback()

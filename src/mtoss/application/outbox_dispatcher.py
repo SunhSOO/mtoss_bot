@@ -8,6 +8,8 @@ class OutboxRepositoryPort(Protocol):
 
     async def mark_published(self, event_id: str) -> None: ...
 
+    async def rollback(self) -> None: ...
+
 
 class OutboxDispatcher:
     def __init__(self, repository: OutboxRepositoryPort, publisher: EventPublisher) -> None:
@@ -15,12 +17,23 @@ class OutboxDispatcher:
         self.publisher = publisher
 
     async def dispatch_once(self, limit: int = 100) -> int:
+        return await self.dispatch_batch(limit)
+
+    async def dispatch_batch(self, limit: int = 100) -> int:
         count = 0
-        for event in await self.repository.claim(limit):
+        while count < limit:
+            events = await self.repository.claim(1)
+            if not events:
+                break
+            event = events[0]
             payload = dict(cast(dict[str, object], event["payload"]))
-            await self.publisher.publish(
-                str(event["topic"]), str(event["message_key"]), payload
-            )
+            try:
+                await self.publisher.publish(
+                    str(event["topic"]), str(event["message_key"]), payload
+                )
+            except BaseException:
+                await self.repository.rollback()
+                raise
             await self.repository.mark_published(str(event["id"]))
             count += 1
         return count

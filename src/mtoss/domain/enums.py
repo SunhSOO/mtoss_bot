@@ -1,0 +1,32 @@
+from enum import StrEnum
+
+
+class SourceType(StrEnum):
+    STRATEGY = "STRATEGY"
+    LEADER = "LEADER"
+    EXTERNAL = "EXTERNAL"
+    FORM_13F = "FORM_13F"
+
+
+class SignalIntent(StrEnum):
+    TARGET_WEIGHT = "TARGET_WEIGHT"
+    TARGET_QUANTITY = "TARGET_QUANTITY"
+    CLOSE = "CLOSE"
+
+
+class OrderSide(StrEnum):
+    BUY = "BUY"
+    SELL = "SELL"
+
+
+class OrderState(StrEnum):
+    CREATED = "CREATED"
+    PENDING_APPROVAL = "PENDING_APPROVAL"
+    QUEUED = "QUEUED"
+    SUBMITTED = "SUBMITTED"
+    PARTIALLY_FILLED = "PARTIALLY_FILLED"
+    FILLED = "FILLED"
+    CANCELED = "CANCELED"
+    REJECTED = "REJECTED"
+    EXPIRED = "EXPIRED"
+    UNKNOWN = "UNKNOWN"

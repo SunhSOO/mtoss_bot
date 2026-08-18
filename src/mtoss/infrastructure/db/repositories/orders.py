@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mtoss.application.order_state_machine import transition
 from mtoss.domain.enums import OrderState
 from mtoss.domain.orders import BrokerOrderResult, ExecutionIntent
+from mtoss.domain.risk import RiskDecision
 from mtoss.infrastructure.db.models.audit import AuditEventRecord
 from mtoss.infrastructure.db.models.order import OrderIntentRecord
 from mtoss.infrastructure.db.models.outbox import OutboxEventRecord
@@ -74,6 +75,26 @@ class OrderRepository:
             )
         await self.session.flush()
         return record.id
+
+    async def record_risk_rejection(
+        self,
+        account_id: UUID,
+        signal_id: UUID,
+        decision: RiskDecision,
+    ) -> None:
+        self.session.add(
+            AuditEventRecord(
+                id=decision.decision_id,
+                event_type="RISK_REJECTED",
+                actor_id=None,
+                trace_id=signal_id,
+                payload={
+                    "account_id": str(account_id),
+                    "decision": decision.model_dump(mode="json"),
+                },
+            )
+        )
+        await self.session.flush()
 
     async def get(self, order_id: UUID) -> OrderIntentRecord | None:
         return await self.session.get(OrderIntentRecord, order_id)

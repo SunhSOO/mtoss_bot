@@ -29,47 +29,38 @@ def _safe_attribute(value: object, name: str) -> object | None:
 
 
 def _is_duplicate_intent_integrity_error(error: IntegrityError) -> bool:
-    stack: list[object] = [error]
-    visited: set[int] = set()
-    sqlstates: set[str] = set()
-    constraint_names: set[str] = set()
+    current = _safe_attribute(error, "orig")
+    if current is None:
+        current = error
 
-    while stack:
-        current = stack.pop()
+    visited: set[int] = set()
+    has_duplicate_sqlstate = False
+    has_idempotency_constraint = False
+
+    while current is not None:
         identity = id(current)
         if identity in visited:
-            continue
+            break
         visited.add(identity)
 
         for value in (
             _safe_attribute(current, "sqlstate"),
             _safe_attribute(current, "pgcode"),
         ):
-            if isinstance(value, str):
-                sqlstates.add(value)
+            if value == _DUPLICATE_SQLSTATE:
+                has_duplicate_sqlstate = True
         constraint_name = _safe_attribute(current, "constraint_name")
-        if isinstance(constraint_name, str):
-            constraint_names.add(constraint_name)
+        if constraint_name == _IDEMPOTENCY_CONSTRAINT:
+            has_idempotency_constraint = True
         diag = _safe_attribute(current, "diag")
         if diag is not None:
             diag_constraint = _safe_attribute(diag, "constraint_name")
-            if isinstance(diag_constraint, str):
-                constraint_names.add(diag_constraint)
+            if diag_constraint == _IDEMPOTENCY_CONSTRAINT:
+                has_idempotency_constraint = True
 
-        stack.extend(
-            candidate
-            for candidate in (
-                _safe_attribute(current, "orig"),
-                _safe_attribute(current, "__cause__"),
-                _safe_attribute(current, "__context__"),
-            )
-            if candidate is not None
-        )
+        current = _safe_attribute(current, "__cause__")
 
-    return (
-        _DUPLICATE_SQLSTATE in sqlstates
-        and _IDEMPOTENCY_CONSTRAINT in constraint_names
-    )
+    return has_duplicate_sqlstate and has_idempotency_constraint
 
 
 @router.post("", status_code=201, response_model=CreateIntentResponse)

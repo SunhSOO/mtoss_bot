@@ -416,6 +416,30 @@ def test_duplicate_intent_rolls_back_and_returns_conflict(
     assert session.rollbacks == 1
 
 
+def test_duplicate_metadata_on_unrelated_context_is_not_combined(
+    settings: Settings,
+    valid_payload: dict[str, object],
+) -> None:
+    authoritative = DatabaseMetadataError("23505", "uq_some_other_unique_key")
+    unrelated_context = DatabaseMetadataError(
+        None, "uq_order_intent_idempotency"
+    )
+    authoritative.__context__ = unrelated_context
+    failure = IntegrityError("INSERT INTO order_intents", {}, authoritative)
+    session = FakeSession()
+
+    with make_client(settings, IntegrityFailureService(failure), session) as client:
+        with pytest.raises(IntegrityError) as raised:
+            client.post(
+                "/internal/v1/execution-intents",
+                headers={"X-Internal-Key": "test-key"},
+                json=valid_payload,
+            )
+    assert raised.value is failure
+    assert session.commits == 0
+    assert session.rollbacks == 1
+
+
 @pytest.mark.parametrize(
     ("sqlstate", "constraint_name"),
     [
@@ -447,13 +471,14 @@ def test_unrelated_integrity_failure_rolls_back_and_is_reraised(
     assert session.rollbacks == 1
 
 
-def test_malformed_integrity_metadata_is_inspected_without_classifier_error(
+def test_cyclic_unhashable_integrity_metadata_is_safe(
     settings: Settings,
     valid_payload: dict[str, object],
 ) -> None:
     malformed = Exception("malformed metadata")
     malformed.sqlstate = []  # type: ignore[attr-defined]
     malformed.constraint_name = {}  # type: ignore[attr-defined]
+    malformed.__cause__ = malformed
     failure = IntegrityError("INSERT INTO order_intents", {}, malformed)
     session = FakeSession()
 

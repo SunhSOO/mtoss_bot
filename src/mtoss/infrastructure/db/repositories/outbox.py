@@ -36,3 +36,4 @@ class OutboxRepository:
             raise LookupError(event_id)
         record.published_at = datetime.now(UTC)
         await self.session.flush()
+        await self.session.commit()

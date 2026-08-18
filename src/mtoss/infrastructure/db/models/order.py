@@ -7,6 +7,7 @@ from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from mtoss.domain.enums import OrderSide, OrderState
+from mtoss.domain.orders import BrokerOrderResult, ExecutionIntent
 from mtoss.infrastructure.db.base import Base
 
 
@@ -38,3 +39,30 @@ class OrderIntentRecord(Base):
     error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
     risk_decision_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True))
     approval_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True))
+
+    def as_domain(self) -> ExecutionIntent:
+        return ExecutionIntent(
+            intent_id=self.id,
+            account_id=self.account_id,
+            signal_id=self.signal_id,
+            target_version=self.target_version,
+            market=self.market,
+            symbol=self.symbol,
+            side=self.side,
+            quantity=self.quantity,
+            limit_price=self.limit_price,
+            currency=self.currency,
+            expires_at=self.expires_at,
+            idempotency_key=self.idempotency_key,
+        )
+
+    def as_broker_result(self) -> BrokerOrderResult:
+        return BrokerOrderResult(
+            client_order_id=self.idempotency_key,
+            broker_order_id=self.broker_order_id,
+            state=self.state,
+            filled_quantity=self.filled_quantity,
+            average_price=self.average_price,
+            broker_request_id=self.broker_request_id,
+            error_code=self.error_code,
+        )

@@ -3,8 +3,9 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mtoss.application.order_state_machine import transition
 from mtoss.domain.enums import OrderState
-from mtoss.domain.orders import ExecutionIntent
+from mtoss.domain.orders import BrokerOrderResult, ExecutionIntent
 from mtoss.infrastructure.db.models.audit import AuditEventRecord
 from mtoss.infrastructure.db.models.order import OrderIntentRecord
 from mtoss.infrastructure.db.models.outbox import OutboxEventRecord
@@ -76,6 +77,27 @@ class OrderRepository:
 
     async def get(self, order_id: UUID) -> OrderIntentRecord | None:
         return await self.session.get(OrderIntentRecord, order_id)
+
+    async def lock_for_execution(self, intent_id: UUID) -> OrderIntentRecord:
+        statement = (
+            select(OrderIntentRecord)
+            .where(OrderIntentRecord.id == intent_id)
+            .with_for_update()
+        )
+        record = await self.session.scalar(statement)
+        if record is None:
+            raise LookupError(str(intent_id))
+        return record
+
+    async def save_broker_result(self, intent_id: UUID, result: BrokerOrderResult) -> None:
+        record = await self.lock_for_execution(intent_id)
+        record.state = transition(record.state, result.state)
+        record.broker_order_id = result.broker_order_id
+        record.filled_quantity = result.filled_quantity
+        record.average_price = result.average_price
+        record.broker_request_id = result.broker_request_id
+        record.error_code = result.error_code
+        await self.session.flush()
 
     async def count_orders(self) -> int:
         statement = select(func.count()).select_from(OrderIntentRecord)

@@ -180,3 +180,216 @@ def test_broker_order_result_rejects_float_decimal_fields(field: str) -> None:
             average_price=0.1 if field == "average_price" else Decimal("72000"),
             broker_request_id="request-1",
         )
+
+
+@pytest.mark.parametrize(
+    "non_finite",
+    [
+        "NaN",
+        "Infinity",
+        "-Infinity",
+        Decimal("NaN"),
+        Decimal("Infinity"),
+        Decimal("-Infinity"),
+    ],
+)
+def test_trade_signal_rejects_non_finite_string_and_decimal_weights(
+    non_finite: object,
+) -> None:
+    now = datetime.now(UTC)
+    with pytest.raises(ValidationError, match="finite"):
+        TradeSignal(
+            signal_id=uuid4(),
+            source_type=SourceType.STRATEGY,
+            source_id="trend-v1",
+            source_version="sha256:abc",
+            generated_at=now,
+            observed_at=now,
+            expires_at=now + timedelta(seconds=90),
+            market="MT5",
+            symbol="USDJPY",
+            currency="USD",
+            target_weight=non_finite,
+            raw_payload_hash="a" * 64,
+            trace_id=uuid4(),
+        )
+
+
+@pytest.mark.parametrize("field", ["quantity", "limit_price"])
+@pytest.mark.parametrize(
+    "non_finite",
+    [
+        "NaN",
+        "Infinity",
+        "-Infinity",
+        Decimal("NaN"),
+        Decimal("Infinity"),
+        Decimal("-Infinity"),
+    ],
+)
+def test_execution_intent_rejects_non_finite_string_and_decimal_values(
+    field: str, non_finite: object
+) -> None:
+    values: dict[str, object] = {
+        "quantity": Decimal("3"),
+        "limit_price": Decimal("72000"),
+    }
+    values[field] = non_finite
+
+    with pytest.raises(ValidationError, match="finite"):
+        ExecutionIntent(
+            intent_id=uuid4(),
+            account_id=uuid4(),
+            signal_id=uuid4(),
+            target_version=1,
+            market="KR",
+            symbol="005930",
+            side=OrderSide.BUY,
+            quantity=values["quantity"],
+            limit_price=values["limit_price"],
+            currency="KRW",
+            expires_at=datetime.now(UTC),
+            idempotency_key="f" * 64,
+        )
+
+
+@pytest.mark.parametrize("field", ["filled_quantity", "average_price"])
+@pytest.mark.parametrize(
+    "non_finite",
+    [
+        "NaN",
+        "Infinity",
+        "-Infinity",
+        Decimal("NaN"),
+        Decimal("Infinity"),
+        Decimal("-Infinity"),
+    ],
+)
+def test_broker_result_rejects_non_finite_string_and_decimal_values(
+    field: str, non_finite: object
+) -> None:
+    values: dict[str, object] = {
+        "filled_quantity": Decimal("3"),
+        "average_price": Decimal("72000"),
+    }
+    values[field] = non_finite
+
+    with pytest.raises(ValidationError, match="finite"):
+        BrokerOrderResult(
+            client_order_id="client-1",
+            broker_order_id="broker-1",
+            state=OrderState.FILLED,
+            filled_quantity=values["filled_quantity"],
+            average_price=values["average_price"],
+            broker_request_id="request-1",
+        )
+
+
+@pytest.mark.parametrize("field", ["quantity", "limit_price"])
+@pytest.mark.parametrize(
+    "outside_numeric",
+    [
+        "1000000000000000000",
+        Decimal("1000000000000000000"),
+        "0.00000000001",
+        Decimal("0.00000000001"),
+    ],
+)
+def test_execution_intent_rejects_values_outside_numeric_28_10(
+    field: str, outside_numeric: object
+) -> None:
+    values: dict[str, object] = {
+        "quantity": Decimal("3"),
+        "limit_price": Decimal("72000"),
+    }
+    values[field] = outside_numeric
+
+    with pytest.raises(ValidationError, match=r"NUMERIC\(28,10\)"):
+        ExecutionIntent(
+            intent_id=uuid4(),
+            account_id=uuid4(),
+            signal_id=uuid4(),
+            target_version=1,
+            market="KR",
+            symbol="005930",
+            side=OrderSide.BUY,
+            quantity=values["quantity"],
+            limit_price=values["limit_price"],
+            currency="KRW",
+            expires_at=datetime.now(UTC),
+            idempotency_key="f" * 64,
+        )
+
+
+@pytest.mark.parametrize("field", ["filled_quantity", "average_price"])
+@pytest.mark.parametrize(
+    "outside_numeric",
+    [
+        "1000000000000000000",
+        Decimal("1000000000000000000"),
+        "0.00000000001",
+        Decimal("0.00000000001"),
+    ],
+)
+def test_broker_result_rejects_values_outside_numeric_28_10(
+    field: str, outside_numeric: object
+) -> None:
+    values: dict[str, object] = {
+        "filled_quantity": Decimal("3"),
+        "average_price": Decimal("72000"),
+    }
+    values[field] = outside_numeric
+
+    with pytest.raises(ValidationError, match=r"NUMERIC\(28,10\)"):
+        BrokerOrderResult(
+            client_order_id="client-1",
+            broker_order_id="broker-1",
+            state=OrderState.FILLED,
+            filled_quantity=values["filled_quantity"],
+            average_price=values["average_price"],
+            broker_request_id="request-1",
+        )
+
+
+def test_order_models_accept_exact_numeric_28_10_boundaries() -> None:
+    maximum = Decimal("999999999999999999.9999999999")
+    intent = ExecutionIntent(
+        intent_id=uuid4(),
+        account_id=uuid4(),
+        signal_id=uuid4(),
+        target_version=1,
+        market="KR",
+        symbol="005930",
+        side=OrderSide.BUY,
+        quantity=maximum,
+        limit_price=maximum,
+        currency="KRW",
+        expires_at=datetime.now(UTC),
+        idempotency_key="f" * 64,
+    )
+    result = BrokerOrderResult(
+        client_order_id=intent.idempotency_key,
+        broker_order_id="broker-1",
+        state=OrderState.FILLED,
+        filled_quantity=maximum,
+        average_price=maximum,
+        broker_request_id="request-1",
+    )
+
+    assert intent.quantity == maximum
+    assert intent.limit_price == maximum
+    assert result.filled_quantity == maximum
+    assert result.average_price == maximum
+
+
+@pytest.mark.parametrize("invalid_price", [Decimal("0"), "0", Decimal("-1"), "-1"])
+def test_broker_result_rejects_non_positive_average_price(invalid_price: object) -> None:
+    with pytest.raises(ValidationError, match="average_price must be positive"):
+        BrokerOrderResult(
+            client_order_id="client-1",
+            broker_order_id="broker-1",
+            state=OrderState.FILLED,
+            filled_quantity=Decimal("1"),
+            average_price=invalid_price,
+            broker_request_id="request-1",
+        )

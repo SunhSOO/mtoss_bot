@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import DateTime, Enum, Numeric, String, UniqueConstraint
+from sqlalchemy import CheckConstraint, DateTime, Enum, Numeric, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -13,7 +13,22 @@ from mtoss.infrastructure.db.base import Base
 
 class OrderIntentRecord(Base):
     __tablename__ = "order_intents"
-    __table_args__ = (UniqueConstraint("idempotency_key", name="uq_order_intent_idempotency"),)
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_order_intent_idempotency"),
+        CheckConstraint("quantity > 0", name="ck_order_intents_quantity_positive"),
+        CheckConstraint(
+            "limit_price IS NULL OR limit_price > 0",
+            name="ck_order_intents_limit_price_positive",
+        ),
+        CheckConstraint(
+            "filled_quantity >= 0",
+            name="ck_order_intents_filled_quantity_non_negative",
+        ),
+        CheckConstraint(
+            "average_price IS NULL OR average_price > 0",
+            name="ck_order_intents_average_price_positive",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
     account_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), index=True)

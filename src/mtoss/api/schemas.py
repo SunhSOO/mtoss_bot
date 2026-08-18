@@ -2,11 +2,12 @@ from datetime import UTC, datetime
 from decimal import Decimal, DecimalException
 from uuid import UUID
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from mtoss.application.intent_service import CreateIntentCommand, IntentCreationResult
 from mtoss.domain.approvals import ApprovalMode, ApprovalPolicyConfig
 from mtoss.domain.enums import OrderSide
+from mtoss.domain.orders import validate_order_decimal_input
 from mtoss.domain.risk import RiskRule
 
 
@@ -28,13 +29,13 @@ def _reject_inexact_or_non_finite(value: object, field_name: str) -> object:
 class CreateIntentRequest(BaseModel):
     account_id: UUID
     signal_id: UUID
-    target_version: int
-    market: str
-    symbol: str
+    target_version: int = Field(ge=-2_147_483_648, le=2_147_483_647)
+    market: str = Field(max_length=16)
+    symbol: str = Field(max_length=32)
     side: OrderSide
     quantity: Decimal
     limit_price: Decimal | None
-    currency: str
+    currency: str = Field(max_length=8)
     expires_at: datetime
     account_capital: Decimal
     resulting_symbol_weight: Decimal
@@ -60,6 +61,17 @@ class CreateIntentRequest(BaseModel):
     ) -> object:
         field_name = getattr(info, "field_name", "decimal")
         return _reject_inexact_or_non_finite(value, field_name)
+
+    @field_validator("quantity", "limit_price")
+    @classmethod
+    def require_exact_order_database_decimal(
+        cls, value: Decimal | None, info: object
+    ) -> Decimal | None:
+        if value is None:
+            return value
+        field_name = getattr(info, "field_name", "order decimal")
+        validate_order_decimal_input(value, field_name)
+        return value
 
     @field_validator("expires_at")
     @classmethod

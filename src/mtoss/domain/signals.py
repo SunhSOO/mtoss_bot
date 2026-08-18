@@ -1,5 +1,5 @@
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, DecimalException
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
@@ -36,6 +36,16 @@ class TradeSignal(BaseModel):
     def reject_float_weight(cls, value: object) -> object:
         if isinstance(value, float):
             raise ValueError("target_weight must not be a float")
+        candidate: Decimal | None = None
+        if isinstance(value, Decimal):
+            candidate = value
+        elif isinstance(value, str):
+            try:
+                candidate = Decimal(value)
+            except DecimalException:
+                pass
+        if candidate is not None and not candidate.is_finite():
+            raise ValueError("target_weight must be finite")
         return value
 
     @model_validator(mode="after")

@@ -1,10 +1,43 @@
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, DecimalException
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from mtoss.domain.enums import OrderSide, OrderState
+
+ORDER_NUMERIC_PRECISION = 28
+ORDER_NUMERIC_SCALE = 10
+ORDER_NUMERIC_INTEGER_DIGITS = ORDER_NUMERIC_PRECISION - ORDER_NUMERIC_SCALE
+
+
+def validate_order_decimal_input(value: object, field_name: str) -> object:
+    if isinstance(value, float):
+        raise ValueError(f"{field_name} must not be a float")
+
+    candidate: Decimal | None = None
+    if isinstance(value, Decimal):
+        candidate = value
+    elif isinstance(value, (int, str)):
+        try:
+            candidate = Decimal(value)
+        except DecimalException:
+            pass
+    if candidate is None:
+        return value
+    if not candidate.is_finite():
+        raise ValueError(f"{field_name} must be finite")
+
+    exponent = int(candidate.as_tuple().exponent)
+    scale = max(-exponent, 0)
+    integer_digits = 0 if candidate == 0 else max(candidate.adjusted() + 1, 0)
+    if (
+        scale > ORDER_NUMERIC_SCALE
+        or integer_digits > ORDER_NUMERIC_INTEGER_DIGITS
+        or integer_digits + scale > ORDER_NUMERIC_PRECISION
+    ):
+        raise ValueError(f"{field_name} must fit PostgreSQL NUMERIC(28,10) exactly")
+    return value
 
 
 class ExecutionIntent(BaseModel):
@@ -33,9 +66,7 @@ class ExecutionIntent(BaseModel):
     @field_validator("quantity", mode="before")
     @classmethod
     def reject_float_quantity(cls, value: object) -> object:
-        if isinstance(value, float):
-            raise ValueError("quantity must not be a float")
-        return value
+        return validate_order_decimal_input(value, "quantity")
 
     @field_validator("quantity")
     @classmethod
@@ -47,9 +78,9 @@ class ExecutionIntent(BaseModel):
     @field_validator("limit_price", mode="before")
     @classmethod
     def reject_float_limit_price(cls, value: object) -> object:
-        if isinstance(value, float):
-            raise ValueError("limit_price must not be a float")
-        return value
+        if value is None:
+            return value
+        return validate_order_decimal_input(value, "limit_price")
 
     @field_validator("limit_price")
     @classmethod
@@ -80,13 +111,20 @@ class BrokerOrderResult(BaseModel):
     @field_validator("filled_quantity", "average_price", mode="before")
     @classmethod
     def reject_float_money(cls, value: object) -> object:
-        if isinstance(value, float):
-            raise ValueError("money values must not be floats")
-        return value
+        if value is None:
+            return value
+        return validate_order_decimal_input(value, "order result decimal")
 
     @field_validator("filled_quantity")
     @classmethod
     def require_non_negative_fill(cls, value: Decimal) -> Decimal:
         if value < 0:
             raise ValueError("filled_quantity cannot be negative")
+        return value
+
+    @field_validator("average_price")
+    @classmethod
+    def require_positive_average_price(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and value <= 0:
+            raise ValueError("average_price must be positive")
         return value

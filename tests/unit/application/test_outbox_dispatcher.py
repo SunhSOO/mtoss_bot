@@ -65,6 +65,12 @@ class SequentialOutboxRepository(FakeOutboxRepository):
         return await super().claim(limit)
 
 
+class FailingMarkRepository(SequentialOutboxRepository):
+    async def mark_published(self, event_id: str) -> None:
+        self.rolled_back += 1
+        raise RuntimeError(f"mark failed for {event_id}")
+
+
 @pytest.mark.asyncio
 async def test_dispatch_marks_only_published_events() -> None:
     repository = FakeOutboxRepository()
@@ -107,3 +113,16 @@ async def test_dispatch_batch_claims_and_processes_each_event_once() -> None:
     assert repository.claim_limits == [1, 1]
     assert repository.marked == ["1", "2"]
     assert publisher.keys == ["k", "second"]
+
+
+@pytest.mark.asyncio
+async def test_mark_failure_propagates_without_publishing_later_events() -> None:
+    repository = FailingMarkRepository()
+    publisher = RecordingPublisher()
+
+    with pytest.raises(RuntimeError, match="mark failed for 1"):
+        await OutboxDispatcher(repository, publisher).dispatch_batch(limit=2)
+
+    assert publisher.keys == ["k"]
+    assert repository.marked == []
+    assert repository.rolled_back == 1

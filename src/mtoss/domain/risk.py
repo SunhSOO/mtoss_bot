@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import Decimal, DecimalException
 from enum import StrEnum
 from uuid import UUID
 
@@ -6,7 +6,15 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 
 def _reject_non_finite(value: object, message: str) -> object:
-    if isinstance(value, Decimal) and not value.is_finite():
+    candidate: Decimal | None = None
+    if isinstance(value, Decimal):
+        candidate = value
+    elif isinstance(value, str):
+        try:
+            candidate = Decimal(value)
+        except DecimalException:
+            pass
+    if candidate is not None and not candidate.is_finite():
         raise ValueError(message)
     return value
 
@@ -42,6 +50,13 @@ class RiskRule(BaseModel):
             raise ValueError("limit must not be a float")
         return _reject_non_finite(value, "limit must be finite")
 
+    @field_validator("limit")
+    @classmethod
+    def require_non_negative_limit(cls, value: Decimal) -> Decimal:
+        if value < 0:
+            raise ValueError("limit must be non-negative")
+        return value
+
 
 class RiskContext(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -66,6 +81,20 @@ class RiskContext(BaseModel):
         if isinstance(value, float):
             raise ValueError("risk metrics must not be floats")
         return _reject_non_finite(value, "risk metrics must be finite")
+
+    @field_validator("order_notional", "account_capital")
+    @classmethod
+    def require_positive_metric(cls, value: Decimal) -> Decimal:
+        if value <= 0:
+            raise ValueError("risk metric must be positive")
+        return value
+
+    @field_validator("resulting_symbol_weight", "daily_loss", "drawdown")
+    @classmethod
+    def require_non_negative_metric(cls, value: Decimal) -> Decimal:
+        if value < 0:
+            raise ValueError("risk metric must be non-negative")
+        return value
 
 
 class RiskViolation(BaseModel):

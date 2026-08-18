@@ -59,12 +59,15 @@ class FakeRepository:
     def __init__(self, record: StubRecord) -> None:
         self.record = record
         self.saved: list[BrokerOrderResult] = []
+        self.calls: list[str] = []
 
     async def lock_for_execution(self, intent_id: UUID) -> StubRecord:
+        self.calls.append("lock")
         assert intent_id == self.record.id
         return self.record
 
     async def save_broker_result(self, intent_id: UUID, result: BrokerOrderResult) -> None:
+        self.calls.append("save")
         assert intent_id == self.record.id
         self.saved.append(result)
         self.record.state = result.state
@@ -73,6 +76,9 @@ class FakeRepository:
         self.record.average_price = result.average_price
         self.record.broker_request_id = result.broker_request_id
         self.record.error_code = result.error_code
+
+    async def release_execution_lock(self) -> None:
+        self.calls.append("release")
 
 
 class CountingBroker:
@@ -116,6 +122,7 @@ async def test_execute_submits_eligible_queued_intent_only_once() -> None:
     assert broker.submissions == [record.intent.idempotency_key]
     assert broker.lookups == [(record.intent.account_id, record.intent.idempotency_key)]
     assert repository.saved == [first]
+    assert repository.calls == ["lock", "save", "lock", "release"]
 
 
 @pytest.mark.asyncio
@@ -133,6 +140,7 @@ async def test_execute_rejects_queued_intent_without_risk_evidence() -> None:
 
     assert broker.submissions == []
     assert repository.saved == []
+    assert repository.calls == ["lock", "release"]
 
 
 class TimeoutBroker(CountingBroker):
@@ -194,6 +202,7 @@ async def test_timeout_without_known_broker_order_becomes_unknown_without_resubm
     assert second == first
     assert broker.submissions == [record.intent.idempotency_key]
     assert repository.saved == [first]
+    assert repository.calls == ["lock", "save", "lock", "release"]
 
 
 class RecoveringBroker(CountingBroker):
@@ -219,10 +228,18 @@ class FailingOnceRepository(FakeRepository):
         self.fail_next_save = True
 
     async def save_broker_result(self, intent_id: UUID, result: BrokerOrderResult) -> None:
+        self.calls.append("save")
         if self.fail_next_save:
             self.fail_next_save = False
             raise RuntimeError("transaction rolled back")
-        await super().save_broker_result(intent_id, result)
+        assert intent_id == self.record.id
+        self.saved.append(result)
+        self.record.state = result.state
+        self.record.broker_order_id = result.broker_order_id
+        self.record.filled_quantity = result.filled_quantity
+        self.record.average_price = result.average_price
+        self.record.broker_request_id = result.broker_request_id
+        self.record.error_code = result.error_code
 
 
 @pytest.mark.asyncio
@@ -247,6 +264,7 @@ async def test_recovery_lookup_prevents_resubmit_after_result_persistence_rollba
         (record.intent.account_id, record.intent.idempotency_key),
     ]
     assert repository.saved == [recovered]
+    assert repository.calls == ["lock", "save", "release", "lock", "save"]
 
 
 @pytest.mark.asyncio
@@ -315,3 +333,87 @@ async def test_mismatched_preflight_lookup_fails_closed_without_submit_or_persis
 
     assert broker.submissions == []
     assert repository.saved == []
+    assert repository.calls == ["lock", "release"]
+
+
+@pytest.mark.asyncio
+async def test_mismatched_direct_submit_result_releases_lock_without_persistence() -> None:
+    """A submit response for another client ID must not mutate this intent."""
+    from mtoss.application.execution_service import ExecutionService
+
+    class MismatchedSubmitBroker(CountingBroker):
+        async def submit(self, intent: ExecutionIntent) -> BrokerOrderResult:
+            self.submissions.append(intent.idempotency_key)
+            return BrokerOrderResult(
+                client_order_id="b" * 64,
+                broker_order_id="wrong-order",
+                state=OrderState.SUBMITTED,
+                filled_quantity=Decimal("0"),
+                average_price=None,
+                broker_request_id="wrong-request",
+            )
+
+    record = StubRecord()
+    repository = FakeRepository(record)
+    broker = MismatchedSubmitBroker()
+
+    with pytest.raises(ValueError, match="client order ID does not match"):
+        await ExecutionService(repository, broker).execute(record.id)
+
+    assert repository.saved == []
+    assert repository.calls == ["lock", "release"]
+
+
+@pytest.mark.asyncio
+async def test_non_queued_early_return_releases_lock() -> None:
+    """Returning a stored result must end the transaction that acquired its row lock."""
+    from mtoss.application.execution_service import ExecutionService
+
+    record = StubRecord(state=OrderState.SUBMITTED)
+    repository = FakeRepository(record)
+    broker = CountingBroker()
+
+    result = await ExecutionService(repository, broker).execute(record.id)
+
+    assert result.state is OrderState.SUBMITTED
+    assert repository.calls == ["lock", "release"]
+    assert broker.lookups == []
+    assert broker.submissions == []
+
+
+@pytest.mark.asyncio
+async def test_broker_exception_releases_lock_before_propagating() -> None:
+    """A broker failure must not leave the selected order row locked."""
+    from mtoss.application.execution_service import ExecutionService
+
+    class ExplodingBroker(CountingBroker):
+        async def submit(self, intent: ExecutionIntent) -> BrokerOrderResult:
+            self.submissions.append(intent.idempotency_key)
+            raise RuntimeError("broker unavailable")
+
+    record = StubRecord()
+    repository = FakeRepository(record)
+
+    with pytest.raises(RuntimeError, match="broker unavailable"):
+        await ExecutionService(repository, ExplodingBroker()).execute(record.id)
+
+    assert repository.calls == ["lock", "release"]
+
+
+@pytest.mark.asyncio
+async def test_lock_lookup_error_still_releases_repository_transaction() -> None:
+    """A failed SELECT FOR UPDATE still begins a transaction that must be ended."""
+    from mtoss.application.execution_service import ExecutionService
+
+    class MissingRepository(FakeRepository):
+        async def lock_for_execution(self, intent_id: UUID) -> StubRecord:
+            self.calls.append("lock")
+            raise LookupError(str(intent_id))
+
+    record = StubRecord()
+    repository = MissingRepository(record)
+
+    with pytest.raises(LookupError, match=str(record.id)):
+        await ExecutionService(repository, CountingBroker()).execute(record.id)
+
+    assert repository.calls == ["lock", "release"]

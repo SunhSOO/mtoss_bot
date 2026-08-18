@@ -113,6 +113,10 @@ class OrderRepository:
     async def save_broker_result(self, intent_id: UUID, result: BrokerOrderResult) -> None:
         try:
             record = await self.lock_for_execution(intent_id)
+            if result.client_order_id != record.idempotency_key:
+                raise ValueError(
+                    "broker result client order ID does not match stored idempotency key"
+                )
             if record.state is OrderState.QUEUED and result.state in {
                 OrderState.PARTIALLY_FILLED,
                 OrderState.FILLED,
@@ -130,6 +134,9 @@ class OrderRepository:
         except Exception:
             await self.session.rollback()
             raise
+
+    async def release_execution_lock(self) -> None:
+        await self.session.rollback()
 
     async def count_orders(self) -> int:
         statement = select(func.count()).select_from(OrderIntentRecord)

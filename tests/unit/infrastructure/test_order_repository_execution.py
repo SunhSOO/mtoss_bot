@@ -110,3 +110,31 @@ async def test_failed_atomic_immediate_fill_commit_rolls_back_without_submitted_
     assert record.broker_order_id is None
     assert record.filled_quantity == Decimal("0")
     assert session.calls == ["scalar", "flush", "commit", "rollback"]
+
+
+@pytest.mark.asyncio
+async def test_mismatched_result_identity_rolls_back_before_mutating_record() -> None:
+    """Repository persistence must not trust service-side identity validation alone."""
+    record = make_record()
+    session = ExecutionSession(record)
+    mismatched = immediate_fill(record).model_copy(
+        update={"client_order_id": "e" * 64}
+    )
+
+    with pytest.raises(ValueError, match="client order ID does not match"):
+        await OrderRepository(session).save_broker_result(record.id, mismatched)  # type: ignore[arg-type]
+
+    assert record.state is OrderState.QUEUED
+    assert record.broker_order_id is None
+    assert record.filled_quantity == Decimal("0")
+    assert session.calls == ["scalar", "rollback"]
+
+
+@pytest.mark.asyncio
+async def test_release_execution_lock_rolls_back_session_transaction() -> None:
+    record = make_record()
+    session = ExecutionSession(record)
+
+    await OrderRepository(session).release_execution_lock()  # type: ignore[arg-type]
+
+    assert session.calls == ["rollback"]

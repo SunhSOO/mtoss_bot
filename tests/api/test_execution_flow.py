@@ -240,6 +240,118 @@ def test_request_rejects_binary_float_and_non_finite_decimal(
     assert repository.created == []
 
 
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("account_capital", "0"),
+        ("account_capital", "-1"),
+        ("resulting_symbol_weight", "-0.01"),
+        ("daily_loss", "-0.01"),
+        ("drawdown", "-0.01"),
+    ],
+)
+def test_request_rejects_signed_risk_context_at_the_http_boundary(
+    settings: Settings,
+    valid_payload: dict[str, object],
+    field: str,
+    invalid_value: str,
+) -> None:
+    repository = FakeIntentRepository()
+    session = FakeSession()
+    valid_payload[field] = invalid_value
+
+    with make_client(settings, IntentService(repository), session) as client:
+        response = client.post(
+            "/internal/v1/execution-intents",
+            headers={"X-Internal-Key": "test-key"},
+            json=valid_payload,
+        )
+
+    assert response.status_code == 422
+    assert repository.rejections == []
+    assert repository.created == []
+
+
+def test_request_rejects_negative_risk_limit_at_the_http_boundary(
+    settings: Settings, valid_payload: dict[str, object]
+) -> None:
+    repository = FakeIntentRepository()
+    session = FakeSession()
+    risk_rules = valid_payload["risk_rules"]
+    assert isinstance(risk_rules, list)
+    risk_rules[0]["limit"] = "-1"
+
+    with make_client(settings, IntentService(repository), session) as client:
+        response = client.post(
+            "/internal/v1/execution-intents",
+            headers={"X-Internal-Key": "test-key"},
+            json=valid_payload,
+        )
+
+    assert response.status_code == 422
+    assert repository.rejections == []
+    assert repository.created == []
+
+
+@pytest.mark.parametrize("field", ["quantity", "limit_price"])
+@pytest.mark.parametrize(
+    "outside_numeric",
+    ["1000000000000000000", "0.00000000001"],
+    ids=["nineteen-integer-digits", "eleven-fractional-digits"],
+)
+def test_request_rejects_order_decimals_outside_numeric_28_10(
+    settings: Settings,
+    valid_payload: dict[str, object],
+    field: str,
+    outside_numeric: str,
+) -> None:
+    repository = FakeIntentRepository()
+    session = FakeSession()
+    valid_payload[field] = outside_numeric
+
+    with make_client(settings, IntentService(repository), session) as client:
+        response = client.post(
+            "/internal/v1/execution-intents",
+            headers={"X-Internal-Key": "test-key"},
+            json=valid_payload,
+        )
+
+    assert response.status_code == 422
+    assert repository.rejections == []
+    assert repository.created == []
+
+
+@pytest.mark.parametrize(
+    ("field", "oversized_value"),
+    [
+        ("market", "M" * 17),
+        ("symbol", "S" * 33),
+        ("currency", "C" * 9),
+        ("target_version", 2_147_483_648),
+        ("target_version", -2_147_483_649),
+    ],
+)
+def test_request_rejects_values_that_exceed_order_column_bounds(
+    settings: Settings,
+    valid_payload: dict[str, object],
+    field: str,
+    oversized_value: object,
+) -> None:
+    repository = FakeIntentRepository()
+    session = FakeSession()
+    valid_payload[field] = oversized_value
+
+    with make_client(settings, IntentService(repository), session) as client:
+        response = client.post(
+            "/internal/v1/execution-intents",
+            headers={"X-Internal-Key": "test-key"},
+            json=valid_payload,
+        )
+
+    assert response.status_code == 422
+    assert repository.created == []
+
+
 def test_request_requires_an_aware_expiration_timestamp(
     settings: Settings, valid_payload: dict[str, object]
 ) -> None:

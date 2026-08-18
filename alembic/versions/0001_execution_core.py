@@ -35,6 +35,21 @@ def upgrade() -> None:
         sa.Column("risk_decision_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("approval_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.UniqueConstraint("idempotency_key", name="uq_order_intent_idempotency"),
+        sa.CheckConstraint(
+            "quantity > 0", name="ck_order_intents_quantity_positive"
+        ),
+        sa.CheckConstraint(
+            "limit_price IS NULL OR limit_price > 0",
+            name="ck_order_intents_limit_price_positive",
+        ),
+        sa.CheckConstraint(
+            "filled_quantity >= 0",
+            name="ck_order_intents_filled_quantity_non_negative",
+        ),
+        sa.CheckConstraint(
+            "average_price IS NULL OR average_price > 0",
+            name="ck_order_intents_average_price_positive",
+        ),
     )
     op.create_index("ix_order_intents_account_id", "order_intents", ["account_id"])
     op.create_index("ix_order_intents_signal_id", "order_intents", ["signal_id"])

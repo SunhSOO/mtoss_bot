@@ -31,12 +31,16 @@ class OutboxRepository:
         ]
 
     async def mark_published(self, event_id: str) -> None:
-        record = await self.session.get(OutboxEventRecord, UUID(event_id))
-        if record is None:
-            raise LookupError(event_id)
-        record.published_at = datetime.now(UTC)
-        await self.session.flush()
-        await self.session.commit()
+        try:
+            record = await self.session.get(OutboxEventRecord, UUID(event_id))
+            if record is None:
+                raise LookupError(event_id)
+            record.published_at = datetime.now(UTC)
+            await self.session.flush()
+            await self.session.commit()
+        except BaseException:
+            await self.session.rollback()
+            raise
 
     async def rollback(self) -> None:
         await self.session.rollback()

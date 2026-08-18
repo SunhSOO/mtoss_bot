@@ -11,7 +11,8 @@ from mtoss.infrastructure.db.repositories.orders import OrderRepository
 
 
 @pytest.mark.asyncio
-async def test_intent_and_outbox_are_atomic_and_idempotent(db_session) -> None:
+@pytest.mark.parametrize("_attempt", [1, 2])
+async def test_intent_and_outbox_are_atomic_and_idempotent(db_session, _attempt: int) -> None:
     intent = ExecutionIntent(
         intent_id=uuid4(),
         account_id=uuid4(),

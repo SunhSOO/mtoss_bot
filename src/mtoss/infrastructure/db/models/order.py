@@ -20,15 +20,19 @@ class OrderIntentRecord(Base):
     target_version: Mapped[int]
     market: Mapped[str] = mapped_column(String(16))
     symbol: Mapped[str] = mapped_column(String(32))
-    side: Mapped[OrderSide] = mapped_column(Enum(OrderSide, native_enum=False))
+    side: Mapped[OrderSide] = mapped_column(Enum(OrderSide, native_enum=False, length=16))
     quantity: Mapped[Decimal] = mapped_column(Numeric(28, 10))
     limit_price: Mapped[Decimal | None] = mapped_column(Numeric(28, 10), nullable=True)
     currency: Mapped[str] = mapped_column(String(8))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     idempotency_key: Mapped[str] = mapped_column(String(64))
-    state: Mapped[OrderState] = mapped_column(Enum(OrderState, native_enum=False), index=True)
+    state: Mapped[OrderState] = mapped_column(
+        Enum(OrderState, native_enum=False, length=32), index=True
+    )
     broker_order_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    filled_quantity: Mapped[Decimal] = mapped_column(Numeric(28, 10), default=Decimal("0"))
+    filled_quantity: Mapped[Decimal] = mapped_column(
+        Numeric(28, 10), default=Decimal("0"), server_default="0"
+    )
     average_price: Mapped[Decimal | None] = mapped_column(Numeric(28, 10), nullable=True)
     broker_request_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)

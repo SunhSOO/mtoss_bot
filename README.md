@@ -87,16 +87,26 @@ docker compose cp db:/tmp/mtoss.dump ./backups/mtoss.dump
 docker compose exec -T db rm -f /tmp/mtoss.dump
 ```
 
-To recover a fresh or existing local database, stop the API, start healthy dependencies, and
-restore the dump. `pg_restore --clean` replaces the current local `mtoss` schema and data.
+To recover a fresh or existing local database, stop the API and every process using it, then start
+healthy dependencies. The commands below permanently delete all existing data in the local mtoss
+database before restoring the backup. `dropdb --force` terminates active connections to that one
+database; it does not remove the `postgres_data` volume or any other database in the PostgreSQL
+service. Run each command separately and stop on any nonzero exit; do not restore unless both
+`dropdb` and `createdb` succeed.
 
 ```shell
 docker compose up -d --wait db redis
 docker compose cp ./backups/mtoss.dump db:/tmp/mtoss.dump
-docker compose exec -T db pg_restore -U mtoss -d mtoss --clean --if-exists --exit-on-error /tmp/mtoss.dump
+docker compose exec -T db dropdb -U mtoss --if-exists --force mtoss
+docker compose exec -T db createdb -U mtoss -O mtoss mtoss
+docker compose exec -T db pg_restore -U mtoss -d mtoss --exit-on-error /tmp/mtoss.dump
 docker compose exec -T db rm -f /tmp/mtoss.dump
 uv run --env-file .env alembic upgrade head
 ```
+
+Remove the container copy only after `pg_restore` succeeds. If restore fails, keep the host-side
+`backups/mtoss.dump`, repeat the drop/create/restore sequence, and do not resume the API until the
+restore and final migration both succeed.
 
 ## Stop and volume safety
 

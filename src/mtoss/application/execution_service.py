@@ -37,6 +37,11 @@ class ExecutionService:
             return record.as_broker_result()
 
         intent = record.as_domain()
+        known = await self.broker.lookup_by_client_order_id(
+            intent.account_id, intent.idempotency_key
+        )
+        if known is not None:
+            return await self._persist_result(intent_id, known)
         try:
             result = await self.broker.submit(intent)
         except TimeoutError:
@@ -51,6 +56,19 @@ class ExecutionService:
                 average_price=None,
                 broker_request_id=None,
                 error_code="AMBIGUOUS_TIMEOUT",
+            )
+        return await self._persist_result(intent_id, result)
+
+    async def _persist_result(
+        self, intent_id: UUID, result: BrokerOrderResult
+    ) -> BrokerOrderResult:
+        if result.state in {
+            OrderState.PARTIALLY_FILLED,
+            OrderState.FILLED,
+            OrderState.CANCELED,
+        }:
+            await self.repository.save_broker_result(
+                intent_id, result.model_copy(update={"state": OrderState.SUBMITTED})
             )
         await self.repository.save_broker_result(intent_id, result)
         return result

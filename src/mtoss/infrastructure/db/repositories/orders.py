@@ -90,14 +90,19 @@ class OrderRepository:
         return record
 
     async def save_broker_result(self, intent_id: UUID, result: BrokerOrderResult) -> None:
-        record = await self.lock_for_execution(intent_id)
-        record.state = transition(record.state, result.state)
-        record.broker_order_id = result.broker_order_id
-        record.filled_quantity = result.filled_quantity
-        record.average_price = result.average_price
-        record.broker_request_id = result.broker_request_id
-        record.error_code = result.error_code
-        await self.session.flush()
+        try:
+            record = await self.lock_for_execution(intent_id)
+            record.state = transition(record.state, result.state)
+            record.broker_order_id = result.broker_order_id
+            record.filled_quantity = result.filled_quantity
+            record.average_price = result.average_price
+            record.broker_request_id = result.broker_request_id
+            record.error_code = result.error_code
+            await self.session.flush()
+            await self.session.commit()
+        except Exception:
+            await self.session.rollback()
+            raise
 
     async def count_orders(self) -> int:
         statement = select(func.count()).select_from(OrderIntentRecord)

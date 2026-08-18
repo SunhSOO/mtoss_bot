@@ -114,6 +114,7 @@ async def test_execute_submits_eligible_queued_intent_only_once() -> None:
     assert first.state is OrderState.SUBMITTED
     assert second == first
     assert broker.submissions == [record.intent.idempotency_key]
+    assert broker.lookups == [(record.intent.account_id, record.intent.idempotency_key)]
     assert repository.saved == [first]
 
 
@@ -160,7 +161,7 @@ async def test_timeout_looks_up_existing_broker_order_before_persisting_result()
             self, account_id: UUID, client_order_id: str
         ) -> BrokerOrderResult | None:
             self.lookups.append((account_id, client_order_id))
-            return known
+            return known if len(self.lookups) == 2 else None
 
     repository = FakeRepository(record)
     broker = TimeoutThenKnownBroker()
@@ -168,7 +169,10 @@ async def test_timeout_looks_up_existing_broker_order_before_persisting_result()
     result = await ExecutionService(repository, broker).execute(record.id)
 
     assert result == known
-    assert broker.lookups == [(record.intent.account_id, record.intent.idempotency_key)]
+    assert broker.lookups == [
+        (record.intent.account_id, record.intent.idempotency_key),
+        (record.intent.account_id, record.intent.idempotency_key),
+    ]
     assert repository.saved == [known]
 
 
@@ -190,3 +194,94 @@ async def test_timeout_without_known_broker_order_becomes_unknown_without_resubm
     assert second == first
     assert broker.submissions == [record.intent.idempotency_key]
     assert repository.saved == [first]
+
+
+class RecoveringBroker(CountingBroker):
+    def __init__(self) -> None:
+        super().__init__()
+        self.results: dict[str, BrokerOrderResult] = {}
+
+    async def submit(self, intent: ExecutionIntent) -> BrokerOrderResult:
+        result = await super().submit(intent)
+        self.results[intent.idempotency_key] = result
+        return result
+
+    async def lookup_by_client_order_id(
+        self, account_id: UUID, client_order_id: str
+    ) -> BrokerOrderResult | None:
+        self.lookups.append((account_id, client_order_id))
+        return self.results.get(client_order_id)
+
+
+class FailingOnceRepository(FakeRepository):
+    def __init__(self, record: StubRecord) -> None:
+        super().__init__(record)
+        self.fail_next_save = True
+
+    async def save_broker_result(self, intent_id: UUID, result: BrokerOrderResult) -> None:
+        if self.fail_next_save:
+            self.fail_next_save = False
+            raise RuntimeError("transaction rolled back")
+        await super().save_broker_result(intent_id, result)
+
+
+@pytest.mark.asyncio
+async def test_recovery_lookup_prevents_resubmit_after_result_persistence_rollback() -> None:
+    """Submitting again after a rolled-back result would create a duplicate broker order."""
+    from mtoss.application.execution_service import ExecutionService
+
+    record = StubRecord()
+    repository = FailingOnceRepository(record)
+    broker = RecoveringBroker()
+    service = ExecutionService(repository, broker)
+
+    with pytest.raises(RuntimeError, match="transaction rolled back"):
+        await service.execute(record.id)
+    recovered = await service.execute(record.id)
+
+    assert record.state is OrderState.SUBMITTED
+    assert recovered.state is OrderState.SUBMITTED
+    assert broker.submissions == [record.intent.idempotency_key]
+    assert broker.lookups == [
+        (record.intent.account_id, record.intent.idempotency_key),
+        (record.intent.account_id, record.intent.idempotency_key),
+    ]
+    assert repository.saved == [recovered]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "immediate_state",
+    [OrderState.PARTIALLY_FILLED, OrderState.FILLED, OrderState.CANCELED],
+)
+async def test_immediate_broker_result_transitions_through_submitted(
+    immediate_state: OrderState,
+) -> None:
+    """Persisting a terminal fill directly from QUEUED violates the state transition contract."""
+    from mtoss.application.execution_service import ExecutionService
+
+    class ImmediateResultBroker(CountingBroker):
+        async def submit(self, intent: ExecutionIntent) -> BrokerOrderResult:
+            self.submissions.append(intent.idempotency_key)
+            return BrokerOrderResult(
+                client_order_id=intent.idempotency_key,
+                broker_order_id="immediate-1",
+                state=immediate_state,
+                filled_quantity=Decimal("1")
+                if immediate_state in {OrderState.PARTIALLY_FILLED, OrderState.FILLED}
+                else Decimal("0"),
+                average_price=Decimal("225")
+                if immediate_state in {OrderState.PARTIALLY_FILLED, OrderState.FILLED}
+                else None,
+                broker_request_id="immediate-request-1",
+            )
+
+    record = StubRecord()
+    repository = FakeRepository(record)
+    broker = ImmediateResultBroker()
+
+    result = await ExecutionService(repository, broker).execute(record.id)
+
+    assert result.state is immediate_state
+    assert [saved.state for saved in repository.saved] == [OrderState.SUBMITTED, immediate_state]
+    assert record.state is immediate_state

@@ -9,11 +9,12 @@ class FakeBroker:
     """In-memory deterministic broker that deduplicates client order IDs."""
 
     def __init__(self) -> None:
-        self.results: dict[str, BrokerOrderResult] = {}
+        self.results: dict[tuple[UUID, str], BrokerOrderResult] = {}
         self.submitted_keys: list[str] = []
 
     async def submit(self, intent: ExecutionIntent) -> BrokerOrderResult:
-        existing = self.results.get(intent.idempotency_key)
+        key = (intent.account_id, intent.idempotency_key)
+        existing = self.results.get(key)
         if existing is not None:
             return existing
 
@@ -26,11 +27,11 @@ class FakeBroker:
             average_price=None,
             broker_request_id=f"fake-request-{sequence}",
         )
-        self.results[intent.idempotency_key] = result
+        self.results[key] = result
         self.submitted_keys.append(intent.idempotency_key)
         return result
 
     async def lookup_by_client_order_id(
         self, account_id: UUID, client_order_id: str
     ) -> BrokerOrderResult | None:
-        return self.results.get(client_order_id)
+        return self.results.get((account_id, client_order_id))

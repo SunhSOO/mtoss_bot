@@ -283,5 +283,35 @@ async def test_immediate_broker_result_transitions_through_submitted(
     result = await ExecutionService(repository, broker).execute(record.id)
 
     assert result.state is immediate_state
-    assert [saved.state for saved in repository.saved] == [OrderState.SUBMITTED, immediate_state]
+    assert [saved.state for saved in repository.saved] == [immediate_state]
     assert record.state is immediate_state
+
+
+@pytest.mark.asyncio
+async def test_mismatched_preflight_lookup_fails_closed_without_submit_or_persistence() -> None:
+    """Trusting a result for another client ID could reconcile the wrong broker order."""
+    from mtoss.application.execution_service import ExecutionService
+
+    class MismatchedLookupBroker(CountingBroker):
+        async def lookup_by_client_order_id(
+            self, account_id: UUID, client_order_id: str
+        ) -> BrokerOrderResult | None:
+            self.lookups.append((account_id, client_order_id))
+            return BrokerOrderResult(
+                client_order_id="b" * 64,
+                broker_order_id="wrong-order",
+                state=OrderState.SUBMITTED,
+                filled_quantity=Decimal("0"),
+                average_price=None,
+                broker_request_id="wrong-request",
+            )
+
+    record = StubRecord()
+    repository = FakeRepository(record)
+    broker = MismatchedLookupBroker()
+
+    with pytest.raises(ValueError, match="client order ID does not match"):
+        await ExecutionService(repository, broker).execute(record.id)
+
+    assert broker.submissions == []
+    assert repository.saved == []

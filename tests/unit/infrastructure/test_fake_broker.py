@@ -40,3 +40,20 @@ async def test_fake_broker_reuses_result_for_same_client_order_id() -> None:
     assert first == second == looked_up
     assert first.state is OrderState.SUBMITTED
     assert broker.submitted_keys == [intent.idempotency_key]
+
+
+@pytest.mark.asyncio
+async def test_fake_broker_lookup_is_scoped_to_the_requested_account() -> None:
+    """Returning a same-key result from another account could reconcile the wrong order."""
+    from mtoss.infrastructure.broker.fake import FakeBroker
+
+    broker = FakeBroker()
+    first_account_intent = make_intent()
+    other_account_intent = first_account_intent.model_copy(update={"account_id": uuid4()})
+
+    await broker.submit(first_account_intent)
+    result = await broker.lookup_by_client_order_id(
+        other_account_intent.account_id, other_account_intent.idempotency_key
+    )
+
+    assert result is None

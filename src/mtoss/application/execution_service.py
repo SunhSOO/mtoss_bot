@@ -41,34 +41,38 @@ class ExecutionService:
             intent.account_id, intent.idempotency_key
         )
         if known is not None:
-            return await self._persist_result(intent_id, known)
+            return await self._persist_result(
+                intent_id, self._validate_lookup_result(intent, known)
+            )
         try:
             result = await self.broker.submit(intent)
         except TimeoutError:
             known = await self.broker.lookup_by_client_order_id(
                 intent.account_id, intent.idempotency_key
             )
-            result = known or BrokerOrderResult(
-                client_order_id=intent.idempotency_key,
-                broker_order_id=None,
-                state=OrderState.UNKNOWN,
-                filled_quantity=Decimal("0"),
-                average_price=None,
-                broker_request_id=None,
-                error_code="AMBIGUOUS_TIMEOUT",
-            )
+            if known is not None:
+                result = self._validate_lookup_result(intent, known)
+            else:
+                result = BrokerOrderResult(
+                    client_order_id=intent.idempotency_key,
+                    broker_order_id=None,
+                    state=OrderState.UNKNOWN,
+                    filled_quantity=Decimal("0"),
+                    average_price=None,
+                    broker_request_id=None,
+                    error_code="AMBIGUOUS_TIMEOUT",
+                )
         return await self._persist_result(intent_id, result)
+
+    def _validate_lookup_result(
+        self, intent: ExecutionIntent, result: BrokerOrderResult
+    ) -> BrokerOrderResult:
+        if result.client_order_id != intent.idempotency_key:
+            raise ValueError("broker lookup client order ID does not match intent idempotency key")
+        return result
 
     async def _persist_result(
         self, intent_id: UUID, result: BrokerOrderResult
     ) -> BrokerOrderResult:
-        if result.state in {
-            OrderState.PARTIALLY_FILLED,
-            OrderState.FILLED,
-            OrderState.CANCELED,
-        }:
-            await self.repository.save_broker_result(
-                intent_id, result.model_copy(update={"state": OrderState.SUBMITTED})
-            )
         await self.repository.save_broker_result(intent_id, result)
         return result

@@ -92,6 +92,12 @@ class OrderRepository:
     async def save_broker_result(self, intent_id: UUID, result: BrokerOrderResult) -> None:
         try:
             record = await self.lock_for_execution(intent_id)
+            if record.state is OrderState.QUEUED and result.state in {
+                OrderState.PARTIALLY_FILLED,
+                OrderState.FILLED,
+                OrderState.CANCELED,
+            }:
+                record.state = transition(record.state, OrderState.SUBMITTED)
             record.state = transition(record.state, result.state)
             record.broker_order_id = result.broker_order_id
             record.filled_quantity = result.filled_quantity

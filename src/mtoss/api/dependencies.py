@@ -11,10 +11,16 @@ from mtoss.infrastructure.db.repositories.orders import OrderRepository
 
 async def require_internal_key(
     request: Request,
-    x_internal_key: str = Header(default=""),
+    x_internal_key: str | None = Header(default=None),
 ) -> None:
+    if x_internal_key is None or not x_internal_key.strip():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid internal key",
+        )
+    provided = x_internal_key.strip().encode("utf-8")
     expected = request.app.state.settings.internal_api_key
-    if not compare_digest(x_internal_key, expected):
+    if not compare_digest(provided, expected.encode("utf-8")):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="invalid internal key",

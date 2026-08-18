@@ -7,6 +7,8 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
 
 from mtoss.api.app import create_app
 from mtoss.api.dependencies import get_intent_service, get_session
@@ -83,6 +85,46 @@ def make_client(
 def test_internal_endpoint_requires_key(client: TestClient) -> None:
     response = client.post("/internal/v1/execution-intents", json={})
     assert response.status_code == 401
+
+
+def test_settings_reject_blank_internal_key(settings: Settings) -> None:
+    with pytest.raises(ValidationError, match="internal_api_key must not be blank"):
+        Settings(
+            database_url=settings.database_url,
+            redis_url=settings.redis_url,
+            internal_api_key=" \t ",
+        )
+
+
+def test_app_rechecks_internal_key_after_unvalidated_settings_copy(settings: Settings) -> None:
+    bypassed = settings.model_copy(update={"internal_api_key": "  "})
+    with pytest.raises(ValueError, match="internal_api_key must not be blank"):
+        create_app(bypassed)
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {},
+        {"X-Internal-Key": "   "},
+        {"X-Internal-Key": "wrong-key"},
+        [(b"x-internal-key", "잘못된키".encode())],
+    ],
+    ids=["missing", "blank", "wrong", "non-ascii"],
+)
+def test_internal_endpoint_rejects_invalid_key_without_server_error(
+    settings: Settings,
+    valid_payload: dict[str, object],
+    headers: object,
+) -> None:
+    with make_client(settings, IntentService(FakeIntentRepository()), FakeSession()) as client:
+        response = client.post(
+            "/internal/v1/execution-intents",
+            headers=headers,  # type: ignore[arg-type]
+            json=valid_payload,
+        )
+    assert response.status_code == 401
+    assert response.json() == {"detail": "invalid internal key"}
 
 
 def test_internal_key_comes_from_injected_app_settings(
@@ -297,6 +339,27 @@ async def test_sql_repository_records_rejected_risk_audit() -> None:
 class ExplodingService:
     async def create(self, _command: CreateIntentCommand) -> Any:
         raise RuntimeError("service failed")
+
+
+class DuplicateService:
+    async def create(self, _command: CreateIntentCommand) -> Any:
+        raise IntegrityError("INSERT INTO order_intents", {}, Exception("unique violation"))
+
+
+def test_duplicate_intent_rolls_back_and_returns_conflict(
+    settings: Settings, valid_payload: dict[str, object]
+) -> None:
+    session = FakeSession()
+    with make_client(settings, DuplicateService(), session) as client:
+        response = client.post(
+            "/internal/v1/execution-intents",
+            headers={"X-Internal-Key": "test-key"},
+            json=valid_payload,
+        )
+    assert response.status_code == 409
+    assert response.json() == {"detail": {"code": "DUPLICATE_INTENT"}}
+    assert session.commits == 0
+    assert session.rollbacks == 1
 
 
 def test_unexpected_creation_failure_rolls_back(

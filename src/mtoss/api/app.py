@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from mtoss.api.routes.execution import router as execution_router
 from mtoss.api.routes.health import router as health_router
-from mtoss.config import Settings
+from mtoss.config import Settings, validate_internal_api_key
 from mtoss.infrastructure.db.session import create_session_factory
 
 
@@ -25,6 +25,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     resolved = settings or Settings()  # type: ignore[call-arg]
+    resolved = resolved.model_copy(
+        update={"internal_api_key": validate_internal_api_key(resolved.internal_api_key)}
+    )
     session_factory = create_session_factory(resolved.database_url)
     db_engine = cast(AsyncEngine, session_factory.kw["bind"])
 

@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -61,11 +61,53 @@ def test_policy_requires_aware_timestamps() -> None:
 def test_manual_mode_is_pending_and_limit_boundary_is_auto() -> None:
     now = datetime.now(UTC)
     expiry = now + timedelta(seconds=90)
-    assert ApprovalPolicy().decide(
-        ApprovalPolicyConfig(mode=ApprovalMode.MANUAL, auto_notional_limit=None),
-        Decimal("1"), now, expiry
-    ).status is ApprovalStatus.PENDING
-    assert ApprovalPolicy().decide(
-        ApprovalPolicyConfig(mode=ApprovalMode.CONDITIONAL, auto_notional_limit=Decimal("100")),
-        Decimal("100"), now, expiry
-    ).status is ApprovalStatus.APPROVED
+    assert (
+        ApprovalPolicy()
+        .decide(
+            ApprovalPolicyConfig(mode=ApprovalMode.MANUAL, auto_notional_limit=None),
+            Decimal("1"),
+            now,
+            expiry,
+        )
+        .status
+        is ApprovalStatus.PENDING
+    )
+    assert (
+        ApprovalPolicy()
+        .decide(
+            ApprovalPolicyConfig(mode=ApprovalMode.CONDITIONAL, auto_notional_limit=Decimal("100")),
+            Decimal("100"),
+            now,
+            expiry,
+        )
+        .status
+        is ApprovalStatus.APPROVED
+    )
+
+
+@pytest.mark.parametrize("invalid_notional", [0.1, Decimal("NaN"), Decimal("Infinity")])
+def test_policy_rejects_float_or_non_finite_order_notional(invalid_notional: object) -> None:
+    config = ApprovalPolicyConfig(mode=ApprovalMode.AUTO, auto_notional_limit=None)
+    now = datetime.now(UTC)
+    with pytest.raises(ValueError, match="(float|finite)"):
+        ApprovalPolicy().decide(config, invalid_notional, now, now + timedelta(seconds=90))  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("notional", ["100", 100, Decimal("100")])
+def test_policy_accepts_finite_exact_string_integer_and_decimal_notionals(notional: object) -> None:
+    config = ApprovalPolicyConfig(mode=ApprovalMode.CONDITIONAL, auto_notional_limit=Decimal("100"))
+    now = datetime.now(UTC)
+    assert (
+        ApprovalPolicy().decide(config, notional, now, now + timedelta(seconds=90)).status
+        is ApprovalStatus.APPROVED
+    )  # type: ignore[arg-type]
+
+
+def test_policy_compares_equivalent_timezone_offsets_as_same_instant() -> None:
+    config = ApprovalPolicyConfig(mode=ApprovalMode.AUTO, auto_notional_limit=None)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    equivalent_expiry = datetime(2026, 1, 1, 13, 0, tzinfo=timezone(timedelta(hours=1)))
+    assert (
+        ApprovalPolicy().decide(config, Decimal("1"), now, equivalent_expiry).status
+        is ApprovalStatus.EXPIRED
+    )

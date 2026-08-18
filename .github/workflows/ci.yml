@@ -1,0 +1,103 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: mtoss
+          POSTGRES_USER: mtoss
+          POSTGRES_PASSWORD: mtoss
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U mtoss -d mtoss"
+          --health-interval 2s --health-timeout 2s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s --health-timeout 2s --health-retries 20
+    env:
+      DATABASE_URL: postgresql+asyncpg://mtoss:mtoss@localhost:5432/mtoss
+      TEST_DATABASE_URL: postgresql+asyncpg://mtoss:mtoss@localhost:5432/mtoss
+      REDIS_URL: redis://localhost:6379/0
+      INTERNAL_API_KEY: ci-test-key
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --all-groups --locked
+      - name: Wait for PostgreSQL and Redis readiness
+        run: |
+          uv run python - <<'PY'
+          import asyncio
+          import os
+          import time
+
+          from redis.asyncio import Redis
+          from sqlalchemy import text
+          from sqlalchemy.ext.asyncio import create_async_engine
+
+
+          async def wait_until_ready(name, probe):
+              deadline = time.monotonic() + 60
+              while True:
+                  try:
+                      await probe()
+                  except Exception as error:
+                      if time.monotonic() >= deadline:
+                          raise RuntimeError(f"{name} did not become ready") from error
+                      await asyncio.sleep(1)
+                  else:
+                      print(f"{name} is ready")
+                      return
+
+
+          async def main():
+              engine = create_async_engine(os.environ["DATABASE_URL"])
+              redis = Redis.from_url(os.environ["REDIS_URL"])
+
+              async def check_postgres():
+                  async with engine.connect() as connection:
+                      await connection.execute(text("SELECT 1"))
+
+              async def check_redis():
+                  if not await redis.ping():
+                      raise RuntimeError("Redis PING returned a false response")
+
+              try:
+                  await asyncio.gather(
+                      wait_until_ready("PostgreSQL", check_postgres),
+                      wait_until_ready("Redis", check_redis),
+                  )
+              finally:
+                  await redis.aclose()
+                  await engine.dispose()
+
+
+          asyncio.run(main())
+          PY
+      - name: Verify migration round-trip
+        run: |
+          uv run alembic upgrade head
+          uv run alembic downgrade base
+          uv run alembic upgrade head
+      - name: Run PostgreSQL and Redis integration contracts
+        run: uv run pytest tests/integration -v
+      - name: Run unit and API tests
+        run: uv run pytest tests/unit tests/api -v
+      - name: Run Ruff
+        run: uv run ruff check .
+      - name: Run mypy
+        run: uv run mypy src/mtoss

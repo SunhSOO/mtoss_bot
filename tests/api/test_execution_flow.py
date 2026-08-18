@@ -102,6 +102,39 @@ def test_app_rechecks_internal_key_after_unvalidated_settings_copy(settings: Set
         create_app(bypassed)
 
 
+@pytest.mark.parametrize("bypass_method", ["model_copy", "model_construct"])
+@pytest.mark.parametrize(
+    "invalid_timeout",
+    [0.0, -1.0, float("nan"), float("inf"), float("-inf")],
+    ids=["zero", "negative", "nan", "positive-infinity", "negative-infinity"],
+)
+def test_app_revalidates_all_settings_after_unvalidated_timeout_bypass(
+    settings: Settings,
+    bypass_method: str,
+    invalid_timeout: float,
+) -> None:
+    if bypass_method == "model_copy":
+        bypassed = settings.model_copy(
+            update={"readiness_timeout_seconds": invalid_timeout}
+        )
+    else:
+        values = settings.model_dump()
+        values["readiness_timeout_seconds"] = invalid_timeout
+        bypassed = Settings.model_construct(**values)
+
+    with pytest.raises(ValidationError):
+        create_app(bypassed)
+
+
+def test_app_accepts_and_preserves_valid_copied_settings(settings: Settings) -> None:
+    copied = settings.model_copy(update={"readiness_timeout_seconds": 0.05})
+    app = create_app(copied)
+    with TestClient(app) as client:
+        response = client.get("/health/live")
+    assert response.status_code == 200
+    assert app.state.settings.readiness_timeout_seconds == 0.05
+
+
 @pytest.mark.parametrize(
     "headers",
     [
@@ -341,16 +374,37 @@ class ExplodingService:
         raise RuntimeError("service failed")
 
 
-class DuplicateService:
+class DatabaseMetadataError(Exception):
+    def __init__(self, sqlstate: str | None, constraint_name: str | None) -> None:
+        super().__init__("database constraint failure")
+        self.sqlstate = sqlstate
+        self.constraint_name = constraint_name
+
+
+def integrity_error(
+    sqlstate: str | None,
+    constraint_name: str | None,
+) -> IntegrityError:
+    driver_error = DatabaseMetadataError(None, constraint_name)
+    adapter_error = DatabaseMetadataError(sqlstate, None)
+    adapter_error.__cause__ = driver_error
+    return IntegrityError("INSERT INTO order_intents", {}, adapter_error)
+
+
+class IntegrityFailureService:
+    def __init__(self, error: IntegrityError) -> None:
+        self.error = error
+
     async def create(self, _command: CreateIntentCommand) -> Any:
-        raise IntegrityError("INSERT INTO order_intents", {}, Exception("unique violation"))
+        raise self.error
 
 
 def test_duplicate_intent_rolls_back_and_returns_conflict(
     settings: Settings, valid_payload: dict[str, object]
 ) -> None:
     session = FakeSession()
-    with make_client(settings, DuplicateService(), session) as client:
+    duplicate = integrity_error("23505", "uq_order_intent_idempotency")
+    with make_client(settings, IntegrityFailureService(duplicate), session) as client:
         response = client.post(
             "/internal/v1/execution-intents",
             headers={"X-Internal-Key": "test-key"},
@@ -359,6 +413,58 @@ def test_duplicate_intent_rolls_back_and_returns_conflict(
     assert response.status_code == 409
     assert response.json() == {"detail": {"code": "DUPLICATE_INTENT"}}
     assert session.commits == 0
+    assert session.rollbacks == 1
+
+
+@pytest.mark.parametrize(
+    ("sqlstate", "constraint_name"),
+    [
+        ("23505", "uq_some_other_unique_key"),
+        ("23502", None),
+        ("23503", "fk_order_account"),
+        ("23514", "ck_positive_quantity"),
+        (None, None),
+    ],
+    ids=["unrelated-unique", "not-null", "foreign-key", "check", "generic"],
+)
+def test_unrelated_integrity_failure_rolls_back_and_is_reraised(
+    settings: Settings,
+    valid_payload: dict[str, object],
+    sqlstate: str | None,
+    constraint_name: str | None,
+) -> None:
+    session = FakeSession()
+    failure = integrity_error(sqlstate, constraint_name)
+    with make_client(settings, IntegrityFailureService(failure), session) as client:
+        with pytest.raises(IntegrityError) as raised:
+            client.post(
+                "/internal/v1/execution-intents",
+                headers={"X-Internal-Key": "test-key"},
+                json=valid_payload,
+            )
+    assert raised.value is failure
+    assert session.commits == 0
+    assert session.rollbacks == 1
+
+
+def test_malformed_integrity_metadata_is_inspected_without_classifier_error(
+    settings: Settings,
+    valid_payload: dict[str, object],
+) -> None:
+    malformed = Exception("malformed metadata")
+    malformed.sqlstate = []  # type: ignore[attr-defined]
+    malformed.constraint_name = {}  # type: ignore[attr-defined]
+    failure = IntegrityError("INSERT INTO order_intents", {}, malformed)
+    session = FakeSession()
+
+    with make_client(settings, IntegrityFailureService(failure), session) as client:
+        with pytest.raises(IntegrityError) as raised:
+            client.post(
+                "/internal/v1/execution-intents",
+                headers={"X-Internal-Key": "test-key"},
+                json=valid_payload,
+            )
+    assert raised.value is failure
     assert session.rollbacks == 1
 
 

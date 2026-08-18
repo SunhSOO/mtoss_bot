@@ -1,12 +1,12 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
 
-from mtoss.domain.enums import OrderSide, SourceType
-from mtoss.domain.orders import ExecutionIntent
+from mtoss.domain.enums import OrderSide, OrderState, SourceType
+from mtoss.domain.orders import BrokerOrderResult, ExecutionIntent
 from mtoss.domain.signals import TradeSignal
 
 
@@ -51,4 +51,69 @@ def test_execution_intent_rejects_non_positive_quantity() -> None:
             limit_price=Decimal("225"), currency="USD",
             expires_at=datetime.now(UTC) + timedelta(seconds=90),
             idempotency_key="f" * 64,
+        )
+
+
+def test_trade_signal_normalizes_aware_times_to_utc() -> None:
+    local_time = datetime(2026, 1, 1, 9, 0, tzinfo=timezone(timedelta(hours=9)))
+    signal = TradeSignal(
+        signal_id=uuid4(), source_type=SourceType.STRATEGY,
+        source_id="trend-v1", source_version="sha256:abc",
+        generated_at=local_time, observed_at=local_time,
+        expires_at=local_time + timedelta(seconds=90), market="MT5",
+        symbol="USDJPY", currency="USD", target_weight=Decimal("0.10"),
+        raw_payload_hash="a" * 64, trace_id=uuid4(),
+    )
+    assert signal.generated_at == datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+    assert signal.generated_at.tzinfo is UTC
+
+
+def test_execution_intent_normalizes_aware_expiry_to_utc() -> None:
+    local_time = datetime(2026, 1, 1, 9, 0, tzinfo=timezone(timedelta(hours=9)))
+    intent = ExecutionIntent(
+        intent_id=uuid4(), account_id=uuid4(), signal_id=uuid4(),
+        target_version=1, market="KR", symbol="005930", side=OrderSide.BUY,
+        quantity=Decimal("3"), limit_price=Decimal("72000"), currency="KRW",
+        expires_at=local_time, idempotency_key="f" * 64,
+    )
+    assert intent.expires_at == datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+    assert intent.expires_at.tzinfo is UTC
+
+
+@pytest.mark.parametrize("field", ["target_weight"])
+def test_trade_signal_rejects_float_decimal_fields(field: str) -> None:
+    now = datetime.now(UTC)
+    with pytest.raises(ValidationError):
+        TradeSignal(
+            signal_id=uuid4(), source_type=SourceType.STRATEGY,
+            source_id="trend-v1", source_version="sha256:abc",
+            generated_at=now, observed_at=now,
+            expires_at=now + timedelta(seconds=90), market="MT5",
+            symbol="USDJPY", currency="USD", **{field: 0.1},
+            raw_payload_hash="a" * 64, trace_id=uuid4(),
+        )
+
+
+@pytest.mark.parametrize("field", ["quantity", "limit_price"])
+def test_execution_intent_rejects_float_decimal_fields(field: str) -> None:
+    now = datetime.now(UTC)
+    with pytest.raises(ValidationError):
+        ExecutionIntent(
+            intent_id=uuid4(), account_id=uuid4(), signal_id=uuid4(),
+            target_version=1, market="KR", symbol="005930", side=OrderSide.BUY,
+            quantity=0.1 if field == "quantity" else Decimal("3"),
+            limit_price=0.1 if field == "limit_price" else Decimal("72000"),
+            currency="KRW", expires_at=now, idempotency_key="f" * 64,
+        )
+
+
+@pytest.mark.parametrize("field", ["filled_quantity", "average_price"])
+def test_broker_order_result_rejects_float_decimal_fields(field: str) -> None:
+    with pytest.raises(ValidationError):
+        BrokerOrderResult(
+            client_order_id="client-1", broker_order_id="broker-1",
+            state=OrderState.FILLED,
+            filled_quantity=0.1 if field == "filled_quantity" else Decimal("3"),
+            average_price=0.1 if field == "average_price" else Decimal("72000"),
+            broker_request_id="request-1",
         )

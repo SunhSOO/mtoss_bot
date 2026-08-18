@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -23,23 +23,33 @@ class ExecutionIntent(BaseModel):
     expires_at: datetime
     idempotency_key: str
 
-    @field_validator("expires_at")
+    @field_validator("expires_at", mode="before")
     @classmethod
-    def require_timezone(cls, value: datetime) -> datetime:
+    def require_timezone(cls, value: object) -> object:
+        if not isinstance(value, datetime):
+            return value
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("expires_at must be timezone-aware")
-        return value
+        return value.astimezone(UTC)
 
-    @field_validator("quantity")
+    @field_validator("quantity", mode="before")
     @classmethod
-    def require_positive_quantity(cls, value: Decimal) -> Decimal:
+    def require_positive_quantity(cls, value: object) -> object:
+        if isinstance(value, float):
+            raise ValueError("quantity must not be a float")
+        if not isinstance(value, Decimal):
+            return value
         if value <= 0:
             raise ValueError("quantity must be positive")
         return value
 
-    @field_validator("limit_price")
+    @field_validator("limit_price", mode="before")
     @classmethod
-    def require_positive_limit_price(cls, value: Decimal | None) -> Decimal | None:
+    def require_positive_limit_price(cls, value: object) -> object:
+        if isinstance(value, float):
+            raise ValueError("limit_price must not be a float")
+        if value is None or not isinstance(value, Decimal):
+            return value
         if value is not None and value <= 0:
             raise ValueError("limit_price must be positive")
         return value
@@ -62,6 +72,13 @@ class BrokerOrderResult(BaseModel):
     average_price: Decimal | None
     broker_request_id: str | None
     error_code: str | None = None
+
+    @field_validator("filled_quantity", "average_price", mode="before")
+    @classmethod
+    def reject_float_money(cls, value: object) -> object:
+        if isinstance(value, float):
+            raise ValueError("money values must not be floats")
+        return value
 
     @field_validator("filled_quantity")
     @classmethod

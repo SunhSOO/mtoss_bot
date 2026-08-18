@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -24,11 +24,20 @@ class TradeSignal(BaseModel):
     raw_payload_hash: str
     trace_id: UUID
 
-    @field_validator("generated_at", "observed_at", "expires_at")
+    @field_validator("generated_at", "observed_at", "expires_at", mode="before")
     @classmethod
-    def require_timezone(cls, value: datetime) -> datetime:
+    def require_timezone(cls, value: object) -> object:
+        if not isinstance(value, datetime):
+            return value
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("timestamp must be timezone-aware")
+        return value.astimezone(UTC)
+
+    @field_validator("target_weight", mode="before")
+    @classmethod
+    def reject_float_weight(cls, value: object) -> object:
+        if isinstance(value, float):
+            raise ValueError("target_weight must not be a float")
         return value
 
     @model_validator(mode="after")

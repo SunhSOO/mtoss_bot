@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 
 from mtoss.api.app import create_app
 from mtoss.api.dependencies import get_intent_service, get_session
+from mtoss.api.routes.execution import _is_duplicate_intent_integrity_error
 from mtoss.api.schemas import CreateIntentRequest, to_command
 from mtoss.application.intent_service import CreateIntentCommand, IntentService
 from mtoss.config import Settings
@@ -375,19 +376,64 @@ class ExplodingService:
 
 
 class DatabaseMetadataError(Exception):
-    def __init__(self, sqlstate: str | None, constraint_name: str | None) -> None:
+    def __init__(self, sqlstate: object | None, constraint_name: object | None) -> None:
         super().__init__("database constraint failure")
         self.sqlstate = sqlstate
         self.constraint_name = constraint_name
 
 
+class PoisonEquality:
+    def __eq__(self, _other: object) -> bool:
+        raise RuntimeError("metadata equality must not be called")
+
+
+class PoisonString(str):
+    def __eq__(self, _other: object) -> bool:
+        raise RuntimeError("string subclass equality must not be called")
+
+
 def integrity_error(
-    sqlstate: str | None,
-    constraint_name: str | None,
+    sqlstate: object | None,
+    constraint_name: object | None,
 ) -> IntegrityError:
     driver_error = DatabaseMetadataError(None, constraint_name)
     adapter_error = DatabaseMetadataError(sqlstate, None)
     adapter_error.__cause__ = driver_error
+    return IntegrityError("INSERT INTO order_intents", {}, adapter_error)
+
+
+def malformed_duplicate_integrity_error(
+    metadata_location: str,
+    malformed_kind: str,
+) -> IntegrityError:
+    expected_value = (
+        "23505"
+        if metadata_location in {"sqlstate", "pgcode"}
+        else "uq_order_intent_idempotency"
+    )
+    malformed: object
+    if malformed_kind == "object":
+        malformed = PoisonEquality()
+    else:
+        malformed = PoisonString(expected_value)
+
+    adapter_error = DatabaseMetadataError("23505", None)
+    driver_error = DatabaseMetadataError(None, "uq_order_intent_idempotency")
+    if metadata_location == "sqlstate":
+        adapter_error.sqlstate = malformed
+    elif metadata_location == "pgcode":
+        adapter_error.sqlstate = None
+        adapter_error.pgcode = malformed  # type: ignore[attr-defined]
+    elif metadata_location == "constraint_name":
+        driver_error.constraint_name = malformed
+    else:
+        driver_error.constraint_name = None
+        driver_error.diag = SimpleNamespace(  # type: ignore[attr-defined]
+            constraint_name=malformed
+        )
+
+    adapter_error.__cause__ = driver_error
+    driver_error.__cause__ = adapter_error
     return IntegrityError("INSERT INTO order_intents", {}, adapter_error)
 
 
@@ -397,6 +443,66 @@ class IntegrityFailureService:
 
     async def create(self, _command: CreateIntentCommand) -> Any:
         raise self.error
+
+
+def test_duplicate_classifier_accepts_plain_strings_in_a_cause_cycle() -> None:
+    adapter_error = DatabaseMetadataError("23505", None)
+    driver_error = DatabaseMetadataError(None, "uq_order_intent_idempotency")
+    adapter_error.__cause__ = driver_error
+    driver_error.__cause__ = adapter_error
+    failure = IntegrityError("INSERT INTO order_intents", {}, adapter_error)
+
+    assert _is_duplicate_intent_integrity_error(failure)
+
+
+@pytest.mark.parametrize(
+    "metadata_location",
+    ["sqlstate", "pgcode", "constraint_name", "diag.constraint_name"],
+)
+@pytest.mark.parametrize("malformed_kind", ["object", "string-subclass"])
+def test_duplicate_classifier_ignores_non_plain_string_metadata(
+    metadata_location: str,
+    malformed_kind: str,
+) -> None:
+    failure = malformed_duplicate_integrity_error(
+        metadata_location,
+        malformed_kind,
+    )
+
+    assert not _is_duplicate_intent_integrity_error(failure)
+
+
+@pytest.mark.parametrize(
+    ("metadata_location", "malformed_kind"),
+    [
+        ("sqlstate", "object"),
+        ("constraint_name", "object"),
+        ("sqlstate", "string-subclass"),
+        ("constraint_name", "string-subclass"),
+    ],
+)
+def test_route_reraises_original_integrity_error_for_non_plain_string_metadata(
+    settings: Settings,
+    valid_payload: dict[str, object],
+    metadata_location: str,
+    malformed_kind: str,
+) -> None:
+    failure = malformed_duplicate_integrity_error(
+        metadata_location,
+        malformed_kind,
+    )
+    session = FakeSession()
+
+    with make_client(settings, IntegrityFailureService(failure), session) as client:
+        with pytest.raises(IntegrityError) as raised:
+            client.post(
+                "/internal/v1/execution-intents",
+                headers={"X-Internal-Key": "test-key"},
+                json=valid_payload,
+            )
+    assert raised.value is failure
+    assert session.commits == 0
+    assert session.rollbacks == 1
 
 
 def test_duplicate_intent_rolls_back_and_returns_conflict(

@@ -47,15 +47,21 @@ def _is_duplicate_intent_integrity_error(error: IntegrityError) -> bool:
             _safe_attribute(current, "sqlstate"),
             _safe_attribute(current, "pgcode"),
         ):
-            if value == _DUPLICATE_SQLSTATE:
+            if type(value) is str and value == _DUPLICATE_SQLSTATE:
                 has_duplicate_sqlstate = True
         constraint_name = _safe_attribute(current, "constraint_name")
-        if constraint_name == _IDEMPOTENCY_CONSTRAINT:
+        if (
+            type(constraint_name) is str
+            and constraint_name == _IDEMPOTENCY_CONSTRAINT
+        ):
             has_idempotency_constraint = True
         diag = _safe_attribute(current, "diag")
         if diag is not None:
             diag_constraint = _safe_attribute(diag, "constraint_name")
-            if diag_constraint == _IDEMPOTENCY_CONSTRAINT:
+            if (
+                type(diag_constraint) is str
+                and diag_constraint == _IDEMPOTENCY_CONSTRAINT
+            ):
                 has_idempotency_constraint = True
 
         current = _safe_attribute(current, "__cause__")

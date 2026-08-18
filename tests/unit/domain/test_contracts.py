@@ -80,6 +80,69 @@ def test_execution_intent_normalizes_aware_expiry_to_utc() -> None:
     assert intent.expires_at.tzinfo is UTC
 
 
+def test_trade_signal_parses_and_normalizes_timestamp_strings() -> None:
+    signal = TradeSignal(
+        signal_id=uuid4(), source_type=SourceType.STRATEGY,
+        source_id="trend-v1", source_version="sha256:abc",
+        generated_at="2026-01-01T09:00:00+09:00",
+        observed_at="2026-01-01T09:00:00+09:00",
+        expires_at="2026-01-01T09:01:30+09:00", market="MT5",
+        symbol="USDJPY", currency="USD", target_weight=Decimal("0.10"),
+        raw_payload_hash="a" * 64, trace_id=uuid4(),
+    )
+    assert signal.generated_at == datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+    assert signal.expires_at.tzinfo is UTC
+
+
+def test_trade_signal_rejects_naive_timestamp_string() -> None:
+    with pytest.raises(ValidationError):
+        TradeSignal(
+            signal_id=uuid4(), source_type=SourceType.STRATEGY,
+            source_id="trend-v1", source_version="sha256:abc",
+            generated_at="2026-01-01T09:00:00",
+            observed_at="2026-01-01T09:00:00Z",
+            expires_at="2026-01-01T09:01:30Z", market="MT5",
+            symbol="USDJPY", currency="USD", target_weight=Decimal("0.10"),
+            raw_payload_hash="a" * 64, trace_id=uuid4(),
+        )
+
+
+def test_execution_intent_parses_and_normalizes_timestamp_string() -> None:
+    intent = ExecutionIntent(
+        intent_id=uuid4(), account_id=uuid4(), signal_id=uuid4(),
+        target_version=1, market="KR", symbol="005930", side=OrderSide.BUY,
+        quantity=Decimal("3"), limit_price=Decimal("72000"), currency="KRW",
+        expires_at="2026-01-01T09:00:00+09:00", idempotency_key="f" * 64,
+    )
+    assert intent.expires_at == datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+    assert intent.expires_at.tzinfo is UTC
+
+
+@pytest.mark.parametrize("field, value", [
+    ("quantity", "0"), ("quantity", -1),
+    ("limit_price", "0"), ("limit_price", -1),
+])
+def test_execution_intent_rejects_non_positive_numeric_values(field: str, value: object) -> None:
+    with pytest.raises(ValidationError):
+        ExecutionIntent(
+            intent_id=uuid4(), account_id=uuid4(), signal_id=uuid4(),
+            target_version=1, market="KR", symbol="005930", side=OrderSide.BUY,
+            quantity=value if field == "quantity" else Decimal("3"),
+            limit_price=value if field == "limit_price" else Decimal("72000"),
+            currency="KRW", expires_at=datetime.now(UTC), idempotency_key="f" * 64,
+        )
+
+
+@pytest.mark.parametrize("value", ["-1", -1])
+def test_broker_order_result_rejects_negative_filled_quantity(value: object) -> None:
+    with pytest.raises(ValidationError):
+        BrokerOrderResult(
+            client_order_id="client-1", broker_order_id="broker-1",
+            state=OrderState.FILLED, filled_quantity=value,
+            average_price=Decimal("72000"), broker_request_id="request-1",
+        )
+
+
 @pytest.mark.parametrize("field", ["target_weight"])
 def test_trade_signal_rejects_float_decimal_fields(field: str) -> None:
     now = datetime.now(UTC)

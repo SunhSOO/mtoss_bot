@@ -24,11 +24,9 @@ class TradeSignal(BaseModel):
     raw_payload_hash: str
     trace_id: UUID
 
-    @field_validator("generated_at", "observed_at", "expires_at", mode="before")
+    @field_validator("generated_at", "observed_at", "expires_at")
     @classmethod
-    def require_timezone(cls, value: object) -> object:
-        if not isinstance(value, datetime):
-            return value
+    def require_timezone(cls, value: datetime) -> datetime:
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("timestamp must be timezone-aware")
         return value.astimezone(UTC)

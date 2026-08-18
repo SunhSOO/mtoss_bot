@@ -23,33 +23,37 @@ class ExecutionIntent(BaseModel):
     expires_at: datetime
     idempotency_key: str
 
-    @field_validator("expires_at", mode="before")
+    @field_validator("expires_at")
     @classmethod
-    def require_timezone(cls, value: object) -> object:
-        if not isinstance(value, datetime):
-            return value
+    def require_timezone(cls, value: datetime) -> datetime:
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("expires_at must be timezone-aware")
         return value.astimezone(UTC)
 
     @field_validator("quantity", mode="before")
     @classmethod
-    def require_positive_quantity(cls, value: object) -> object:
+    def reject_float_quantity(cls, value: object) -> object:
         if isinstance(value, float):
             raise ValueError("quantity must not be a float")
-        if not isinstance(value, Decimal):
-            return value
+        return value
+
+    @field_validator("quantity")
+    @classmethod
+    def require_positive_quantity(cls, value: Decimal) -> Decimal:
         if value <= 0:
             raise ValueError("quantity must be positive")
         return value
 
     @field_validator("limit_price", mode="before")
     @classmethod
-    def require_positive_limit_price(cls, value: object) -> object:
+    def reject_float_limit_price(cls, value: object) -> object:
         if isinstance(value, float):
             raise ValueError("limit_price must not be a float")
-        if value is None or not isinstance(value, Decimal):
-            return value
+        return value
+
+    @field_validator("limit_price")
+    @classmethod
+    def require_positive_limit_price(cls, value: Decimal | None) -> Decimal | None:
         if value is not None and value <= 0:
             raise ValueError("limit_price must be positive")
         return value

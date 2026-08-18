@@ -1,0 +1,36 @@
+from datetime import datetime
+from decimal import Decimal
+from uuid import UUID
+
+from sqlalchemy import DateTime, Enum, Numeric, String, UniqueConstraint
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from mtoss.domain.enums import OrderSide, OrderState
+from mtoss.infrastructure.db.base import Base
+
+
+class OrderIntentRecord(Base):
+    __tablename__ = "order_intents"
+    __table_args__ = (UniqueConstraint("idempotency_key", name="uq_order_intent_idempotency"),)
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    account_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), index=True)
+    signal_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), index=True)
+    target_version: Mapped[int]
+    market: Mapped[str] = mapped_column(String(16))
+    symbol: Mapped[str] = mapped_column(String(32))
+    side: Mapped[OrderSide] = mapped_column(Enum(OrderSide, native_enum=False))
+    quantity: Mapped[Decimal] = mapped_column(Numeric(28, 10))
+    limit_price: Mapped[Decimal | None] = mapped_column(Numeric(28, 10), nullable=True)
+    currency: Mapped[str] = mapped_column(String(8))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    idempotency_key: Mapped[str] = mapped_column(String(64))
+    state: Mapped[OrderState] = mapped_column(Enum(OrderState, native_enum=False), index=True)
+    broker_order_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    filled_quantity: Mapped[Decimal] = mapped_column(Numeric(28, 10), default=Decimal("0"))
+    average_price: Mapped[Decimal | None] = mapped_column(Numeric(28, 10), nullable=True)
+    broker_request_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    risk_decision_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True))
+    approval_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True))

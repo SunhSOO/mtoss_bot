@@ -5,6 +5,12 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, field_validator
 
 
+def _reject_non_finite(value: object, message: str) -> object:
+    if isinstance(value, Decimal) and not value.is_finite():
+        raise ValueError(message)
+    return value
+
+
 class RiskScope(StrEnum):
     SYSTEM = "SYSTEM"
     USER = "USER"
@@ -34,7 +40,7 @@ class RiskRule(BaseModel):
     def reject_float_limit(cls, value: object) -> object:
         if isinstance(value, float):
             raise ValueError("limit must not be a float")
-        return value
+        return _reject_non_finite(value, "limit must be finite")
 
 
 class RiskContext(BaseModel):
@@ -59,7 +65,7 @@ class RiskContext(BaseModel):
     def reject_float_metric(cls, value: object) -> object:
         if isinstance(value, float):
             raise ValueError("risk metrics must not be floats")
-        return value
+        return _reject_non_finite(value, "risk metrics must be finite")
 
 
 class RiskViolation(BaseModel):
@@ -75,7 +81,7 @@ class RiskViolation(BaseModel):
     def reject_float_values(cls, value: object) -> object:
         if isinstance(value, float):
             raise ValueError("risk values must not be floats")
-        return value
+        return _reject_non_finite(value, "risk values must be finite")
 
 
 class RiskDecision(BaseModel):

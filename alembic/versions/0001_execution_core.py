@@ -1,8 +1,9 @@
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision: str = "0001_execution_core"
 down_revision: str | None = None
@@ -44,7 +45,9 @@ def upgrade() -> None:
         sa.Column("topic", sa.String(64), nullable=False),
         sa.Column("message_key", sa.String(128), nullable=False),
         sa.Column("payload", postgresql.JSONB(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.Column("published_at", sa.DateTime(timezone=True), nullable=True),
     )
     op.create_index("ix_outbox_events_topic", "outbox_events", ["topic"])
@@ -56,7 +59,9 @@ def upgrade() -> None:
         sa.Column("actor_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("trace_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("payload", postgresql.JSONB(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
     )
     op.create_index("ix_audit_events_event_type", "audit_events", ["event_type"])
     op.create_index("ix_audit_events_trace_id", "audit_events", ["trace_id"])

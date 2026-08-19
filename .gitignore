@@ -10,3 +10,13 @@ __pycache__/
 .coverage
 htmlcov/
 backups/
+
+# web console
+node_modules/
+web/.next/
+web/out/
+web/screenshots/
+web/test-results/
+web/playwright-report/
+.env.local
+*.tsbuildinfo

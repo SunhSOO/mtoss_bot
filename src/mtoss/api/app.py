@@ -6,6 +6,8 @@ from fastapi import FastAPI
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from mtoss.api.console.store import ConsoleStore
+from mtoss.api.routes.console import router as console_router
 from mtoss.api.routes.execution import router as execution_router
 from mtoss.api.routes.health import router as health_router
 from mtoss.config import Settings
@@ -39,4 +41,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.redis = Redis.from_url(resolved.redis_url, decode_responses=True)
     app.include_router(health_router)
     app.include_router(execution_router)
+    if resolved.console_stub_enabled:
+        app.state.console_store = ConsoleStore()
+        app.include_router(console_router)
     return app

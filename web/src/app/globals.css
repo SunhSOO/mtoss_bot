@@ -1,0 +1,188 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   디자인 토큰 — 화면 설계서 §4의 12개 토큰 표를 그대로 옮긴 값이다.
+   라이트가 기본이고 다크는 data-theme 또는 OS 설정으로 전환된다.
+   유틸리티는 var()를 참조하므로 dark: 변형을 어디에서도 쓰지 않는다.
+--------------------------------------------------------------------------- */
+
+:root {
+  --t-bg-canvas: #f4f6f8;
+  --t-bg-surface: #ffffff;
+  --t-bg-subtle: #eef1f4;
+  --t-text-primary: #17202a;
+  --t-text-secondary: #5e6b78;
+  --t-border-default: #d7dee5;
+  --t-action-primary: #2563a6;
+  --t-action-on: #ffffff;
+  --t-status-ok: #237a5b;
+  --t-status-warning: #a86100;
+  /* #A86100은 옅게 칠한 경고 배경 위에서 4.2:1로 미달한다. 텍스트에만 아래를 쓴다. */
+  --t-status-warning-text: #8a5000;
+  --t-status-critical: #b42318;
+  --t-financial-up: #d84343;
+  --t-financial-down: #2f6fd6;
+  /* 스펙 §4의 #D84343은 흰 배경에서 4.4:1이라 본문 대비(AA 4.5:1)에 미달한다.
+     차트 마크에는 원본 값을 그대로 쓰고, 텍스트에만 아래 변형을 쓴다 (§12). */
+  --t-financial-up-text: #c22e2e;
+  --t-financial-down-text: #2f6fd6;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --t-bg-canvas: #0f141a;
+    --t-bg-surface: #171d24;
+    --t-bg-subtle: #202833;
+    --t-text-primary: #eef2f6;
+    --t-text-secondary: #a4afba;
+    --t-border-default: #313b46;
+    --t-action-primary: #5a9bd8;
+    --t-action-on: #0f141a;
+    --t-status-ok: #45b58c;
+    --t-status-warning: #e6a23c;
+    --t-status-warning-text: #e6a23c;
+    --t-status-critical: #f97066;
+    --t-financial-up: #ff7a7a;
+    --t-financial-down: #72a5ff;
+    --t-financial-up-text: #ff7a7a;
+    --t-financial-down-text: #72a5ff;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --t-bg-canvas: #0f141a;
+  --t-bg-surface: #171d24;
+  --t-bg-subtle: #202833;
+  --t-text-primary: #eef2f6;
+  --t-text-secondary: #a4afba;
+  --t-border-default: #313b46;
+  --t-action-primary: #5a9bd8;
+  --t-action-on: #0f141a;
+  --t-status-ok: #45b58c;
+  --t-status-warning: #e6a23c;
+  --t-status-warning-text: #e6a23c;
+  --t-status-critical: #f97066;
+  --t-financial-up: #ff7a7a;
+  --t-financial-down: #72a5ff;
+  --t-financial-up-text: #ff7a7a;
+  --t-financial-down-text: #72a5ff;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-canvas: var(--t-bg-canvas);
+  --color-surface: var(--t-bg-surface);
+  --color-subtle: var(--t-bg-subtle);
+  --color-primary: var(--t-text-primary);
+  --color-secondary: var(--t-text-secondary);
+  --color-line: var(--t-border-default);
+  --color-action: var(--t-action-primary);
+  --color-action-on: var(--t-action-on);
+  --color-ok: var(--t-status-ok);
+  --color-warn: var(--t-status-warning-text);
+  --color-critical: var(--t-status-critical);
+  --color-up: var(--t-financial-up-text);
+  --color-down: var(--t-financial-down-text);
+
+  --radius-panel: 8px;
+  --font-sans: var(--font-pretendard), system-ui, "Malgun Gothic",
+    "Apple SD Gothic Neo", sans-serif;
+}
+
+@layer base {
+  html {
+    background: var(--t-bg-canvas);
+  }
+
+  body {
+    background: var(--t-bg-canvas);
+    color: var(--t-text-primary);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1 {
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+
+  h2 {
+    font-size: 18px;
+    font-weight: 650;
+  }
+
+  h3 {
+    font-size: 15px;
+    font-weight: 650;
+  }
+
+  table {
+    font-size: 13px;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--t-action-primary);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--t-action-primary) 24%, transparent);
+  }
+}
+
+@layer utilities {
+  /* 가격·수량·시각은 자릿수가 흔들리지 않아야 한다 (§4). */
+  .num {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+  }
+
+  /* 색상만으로 상태를 전달하지 않기 위한 보조 패턴 (§4, §12). */
+  .pattern-warn {
+    background-image: repeating-linear-gradient(
+      -45deg,
+      transparent,
+      transparent 3px,
+      color-mix(in srgb, var(--t-status-warning) 55%, transparent) 3px,
+      color-mix(in srgb, var(--t-status-warning) 55%, transparent) 6px
+    );
+  }
+
+  .pattern-critical {
+    background-image: repeating-linear-gradient(
+      -45deg,
+      transparent,
+      transparent 3px,
+      color-mix(in srgb, var(--t-status-critical) 60%, transparent) 3px,
+      color-mix(in srgb, var(--t-status-critical) 60%, transparent) 6px
+    );
+  }
+}
+
+/* 절제된 전환만 사용하고 반복 애니메이션과 깜빡임은 쓰지 않는다 (§11). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

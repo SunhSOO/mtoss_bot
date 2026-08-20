@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     redis_url: str
     internal_api_key: str
     readiness_timeout_seconds: float = Field(default=2.0, gt=0, allow_inf_nan=False)
+    console_stub_enabled: bool = False
 
     @field_validator("internal_api_key")
     @classmethod

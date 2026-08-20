@@ -178,9 +178,12 @@ uv run mypy src/mtoss
 웹 콘솔 검사:
 
 ```shell
-npm --prefix web run typecheck
 npm --prefix web run build
+npm --prefix web run typecheck
 ```
+
+`next-env.d.ts`는 Next가 자동 생성하며 `dev`와 `build`가 서로 다른 경로를 쓰므로 Git이
+무시합니다. 새로 클론했다면 `typecheck` 전에 `build`나 `dev`를 한 번 실행해야 합니다.
 
 ## 화면 검증
 

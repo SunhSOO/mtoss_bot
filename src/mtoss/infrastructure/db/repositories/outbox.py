@@ -11,7 +11,12 @@ class OutboxRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def claim(self, limit: int) -> list[dict[str, object]]:
+    async def claim(self, limit: int, topic: str | None = None) -> list[dict[str, object]]:
+        """`FOR UPDATE SKIP LOCKED`로 집어 온다. 여러 소비자가 같이 돌아도 겹치지 않는다.
+
+        `topic`을 주면 그 토픽만 가져간다. 실행 워커와 알림 워커가 같은 테이블을
+        나눠 쓰면서 서로의 이벤트를 삼키지 않게 하려면 필요하다.
+        """
         statement = (
             select(OutboxEventRecord)
             .where(OutboxEventRecord.published_at.is_(None))
@@ -19,6 +24,8 @@ class OutboxRepository:
             .limit(limit)
             .with_for_update(skip_locked=True)
         )
+        if topic is not None:
+            statement = statement.where(OutboxEventRecord.topic == topic)
         records = list((await self.session.scalars(statement)).all())
         return [
             {

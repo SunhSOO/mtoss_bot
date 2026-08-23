@@ -2,11 +2,20 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, DateTime, Enum, Numeric, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Enum,
+    Numeric,
+    String,
+    UniqueConstraint,
+)
+from sqlalchemy import false as sa_false
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from mtoss.domain.enums import OrderSide, OrderState
+from mtoss.domain.enums import OrderSide, OrderState, OrderType
 from mtoss.domain.orders import BrokerOrderResult, ExecutionIntent
 from mtoss.infrastructure.db.base import Base
 
@@ -28,6 +37,18 @@ class OrderIntentRecord(Base):
             "average_price IS NULL OR average_price > 0",
             name="ck_order_intents_average_price_positive",
         ),
+        CheckConstraint(
+            "reference_price IS NULL OR reference_price > 0",
+            name="ck_order_intents_reference_price_positive",
+        ),
+        CheckConstraint(
+            "stop_loss IS NULL OR stop_loss > 0",
+            name="ck_order_intents_stop_loss_positive",
+        ),
+        CheckConstraint(
+            "take_profit IS NULL OR take_profit > 0",
+            name="ck_order_intents_take_profit_positive",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
@@ -37,8 +58,20 @@ class OrderIntentRecord(Base):
     market: Mapped[str] = mapped_column(String(16))
     symbol: Mapped[str] = mapped_column(String(32))
     side: Mapped[OrderSide] = mapped_column(Enum(OrderSide, native_enum=False, length=16))
+    order_type: Mapped[OrderType] = mapped_column(
+        Enum(OrderType, native_enum=False, length=16),
+        default=OrderType.LIMIT,
+        server_default=OrderType.LIMIT.value,
+    )
     quantity: Mapped[Decimal] = mapped_column(Numeric(28, 10))
     limit_price: Mapped[Decimal | None] = mapped_column(Numeric(28, 10), nullable=True)
+    reference_price: Mapped[Decimal | None] = mapped_column(Numeric(28, 10), nullable=True)
+    stop_loss: Mapped[Decimal | None] = mapped_column(Numeric(28, 10), nullable=True)
+    take_profit: Mapped[Decimal | None] = mapped_column(Numeric(28, 10), nullable=True)
+    reduce_only: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=sa_false()
+    )
+    tranche_ref: Mapped[str | None] = mapped_column(String(16), nullable=True)
     currency: Mapped[str] = mapped_column(String(8))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     idempotency_key: Mapped[str] = mapped_column(String(64))
@@ -64,8 +97,14 @@ class OrderIntentRecord(Base):
             market=self.market,
             symbol=self.symbol,
             side=self.side,
+            order_type=self.order_type,
             quantity=self.quantity,
             limit_price=self.limit_price,
+            reference_price=self.reference_price,
+            stop_loss=self.stop_loss,
+            take_profit=self.take_profit,
+            reduce_only=self.reduce_only,
+            tranche_ref=self.tranche_ref,
             currency=self.currency,
             expires_at=self.expires_at,
             idempotency_key=self.idempotency_key,

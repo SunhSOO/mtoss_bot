@@ -18,9 +18,11 @@ async def ready(request: Request) -> dict[str, str]:
         async with asyncio.timeout(timeout_seconds):
             async with request.app.state.session_factory() as session:
                 await session.execute(text("SELECT 1"))
-        async with asyncio.timeout(timeout_seconds):
-            if not await request.app.state.redis.ping():
-                raise RuntimeError("redis ping failed")
+        redis = request.app.state.redis
+        if redis is not None:
+            async with asyncio.timeout(timeout_seconds):
+                if not await redis.ping():
+                    raise RuntimeError("redis ping failed")
     except Exception as exc:
         raise HTTPException(status_code=503, detail="dependencies unavailable") from exc
     return {"status": "ready"}

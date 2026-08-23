@@ -20,7 +20,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         try:
-            await app.state.redis.aclose()
+            if app.state.redis is not None:
+                await app.state.redis.aclose()
         finally:
             await app.state.db_engine.dispose()
 
@@ -38,7 +39,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = resolved
     app.state.session_factory = session_factory
     app.state.db_engine = db_engine
-    app.state.redis = Redis.from_url(resolved.redis_url, decode_responses=True)
+    # 실행 경로는 PostgreSQL 아웃박스만 쓴다. Redis는 선택 사항이고, 없으면 붙이지 않는다.
+    app.state.redis = (
+        Redis.from_url(resolved.redis_url, decode_responses=True)
+        if resolved.redis_url
+        else None
+    )
     app.include_router(health_router)
     app.include_router(execution_router)
     if resolved.console_stub_enabled:

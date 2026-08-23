@@ -4,7 +4,7 @@ from decimal import Decimal, DecimalException
 from typing import Protocol
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from mtoss.application.approval_policy import ApprovalPolicy
 from mtoss.application.idempotency import build_intent_key
@@ -14,7 +14,7 @@ from mtoss.domain.approvals import (
     ApprovalPolicyConfig,
     ApprovalStatus,
 )
-from mtoss.domain.enums import OrderSide, OrderState
+from mtoss.domain.enums import OrderSide, OrderState, OrderType
 from mtoss.domain.orders import ExecutionIntent
 from mtoss.domain.risk import RiskContext, RiskDecision, RiskRule
 
@@ -28,8 +28,14 @@ class CreateIntentCommand(BaseModel):
     market: str
     symbol: str
     side: OrderSide
+    order_type: OrderType = OrderType.LIMIT
     quantity: Decimal
-    limit_price: Decimal
+    limit_price: Decimal | None = None
+    reference_price: Decimal | None = None
+    stop_loss: Decimal | None = None
+    take_profit: Decimal | None = None
+    reduce_only: bool = False
+    tranche_ref: str | None = None
     currency: str
     expires_at: datetime
     account_capital: Decimal
@@ -42,6 +48,9 @@ class CreateIntentCommand(BaseModel):
     @field_validator(
         "quantity",
         "limit_price",
+        "reference_price",
+        "stop_loss",
+        "take_profit",
         "account_capital",
         "resulting_symbol_weight",
         "daily_loss",
@@ -70,6 +79,17 @@ class CreateIntentCommand(BaseModel):
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("expires_at must be timezone-aware")
         return value.astimezone(UTC)
+
+    @model_validator(mode="after")
+    def require_a_pricing_anchor(self) -> "CreateIntentCommand":
+        if self.pricing_reference is None:
+            raise ValueError("intent requires limit_price or reference_price")
+        return self
+
+    @property
+    def pricing_reference(self) -> Decimal | None:
+        """명목 산정 기준가. 지정가면 지정가, 시장가면 제출 시점 예상 체결가."""
+        return self.limit_price if self.limit_price is not None else self.reference_price
 
 
 class IntentCreationResult(BaseModel):
@@ -143,7 +163,9 @@ class IntentService:
         self.clock = clock or (lambda: datetime.now(UTC))
 
     async def create(self, command: CreateIntentCommand) -> IntentCreationResult:
-        notional = command.quantity * command.limit_price
+        anchor = command.pricing_reference
+        assert anchor is not None  # 모델 검증이 보장한다
+        notional = command.quantity * anchor
         risk = self.risk_engine.evaluate(
             RiskContext(
                 account_id=command.account_id,
@@ -155,6 +177,10 @@ class IntentService:
             ),
             command.risk_rules,
         )
+        if command.reduce_only and not risk.allowed:
+            # 청산은 막지 않는다. 일일 손실 한도에 걸린 순간 손절도 못 내면 포지션에
+            # 갇힌다. 위반 내역은 그대로 남겨 감사에서 보이게 한다.
+            risk = risk.model_copy(update={"allowed": True})
         if not risk.allowed:
             await self.repository.record_risk_rejection(
                 command.account_id,
@@ -179,8 +205,14 @@ class IntentService:
             market=command.market,
             symbol=command.symbol,
             side=command.side,
+            order_type=command.order_type,
             quantity=command.quantity,
             limit_price=command.limit_price,
+            reference_price=command.reference_price,
+            stop_loss=command.stop_loss,
+            take_profit=command.take_profit,
+            reduce_only=command.reduce_only,
+            tranche_ref=command.tranche_ref,
             currency=command.currency,
             expires_at=command.expires_at,
             idempotency_key=build_intent_key(

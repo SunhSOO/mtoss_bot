@@ -2,16 +2,36 @@
 
 MT5·토스증권 시스템 트레이딩 플랫폼의 브로커 독립 주문 실행 코어와 운영 콘솔 웹앱입니다.
 
-현재 단계는 의도적으로 `FakeBroker`로 제한되어 있습니다. MT5나 토스증권 브로커 어댑터,
-실제 브로커 엔드포인트, 실주문 호출은 아직 없습니다.
+**실주문은 아직 나가지 않습니다.** MT5 읽기(진단·심볼 스펙·봉)와 주문 계약·배관은 준비됐지만
+MT5 어댑터 본체가 미구현입니다. 남은 작업은 [이슈 목록](https://github.com/SunhSOO/mtoss_bot/issues)에
+정리돼 있습니다.
+
+## 현재 상태
+
+| 구성 요소 | 상태 |
+|---|---|
+| 주문 실행 코어 (리스크·승인·상태기계) | ✅ |
+| UT Bot 전략 (신호·2트랜치 상태기계·사이징·백테스트) | ✅ |
+| 아웃박스 실행 워커 | ✅ FakeBroker까지 |
+| MT5 읽기 (진단·심볼 스펙·봉·리트코드 매핑·선행기록) | ✅ |
+| 텔레그램 알림·확인 버튼 | ✅ 토큰 설정 시 |
+| MT5 실주문 | ❌ [#4](https://github.com/SunhSOO/mtoss_bot/issues/4) |
+| H1 자동 스케줄러 | ❌ [#7](https://github.com/SunhSOO/mtoss_bot/issues/7) |
+| 콘솔 실데이터 | ❌ [#14](https://github.com/SunhSOO/mtoss_bot/issues/14) — 지금은 목업 |
 
 ## 저장소 구성
 
 | 경로 | 내용 |
 |---|---|
-| `src/mtoss/` | 주문 실행 코어 (Python 3.12 · FastAPI · SQLAlchemy) |
+| `src/mtoss/domain/` | 주문·봉·리스크·확인 요청 도메인 모델 |
+| `src/mtoss/application/` | 인텐트 생성, 리스크, 승인, 트레이드 매니저, 사이징 |
+| `src/mtoss/strategies/ut_bot/` | UT Bot 지표·신호·백테스트 |
+| `src/mtoss/infrastructure/` | DB, 브로커 어댑터(Fake·MT5), 텔레그램 |
+| `src/mtoss/workers/` | 아웃박스 실행 워커 |
 | `src/mtoss/api/console/` | 운영 콘솔용 스텁 API와 한국어 목업 데이터 |
 | `web/` | 운영 콘솔 웹앱 (Next.js · TypeScript) |
+| `ops/` | 운영 스크립트 (MT5 진단 등) |
+| `docs/deployment/` | [미니PC 배포 절차서](docs/deployment/mini-pc.md) |
 | `docs/superpowers/` | 시스템 설계서, 화면 설계서, 구현 계획 |
 | `alembic/` | 데이터베이스 마이그레이션 |
 | `tests/` | 단위·API·통합 테스트 |
@@ -19,26 +39,89 @@ MT5·토스증권 시스템 트레이딩 플랫폼의 브로커 독립 주문 �
 ## 요구 사항
 
 - Python 3.12와 `uv`
+- PostgreSQL 16 이상 (17로 검증). **Windows에서는 네이티브 설치를 권장합니다** — Docker Desktop은
+  WSL2/Hyper-V를 요구하고 자동 업데이트가 데이터베이스를 재시작시킵니다.
 - 웹 콘솔을 실행하려면 Node.js 20 이상
-- 로컬 PostgreSQL 16과 Redis를 위한 Docker (`--wait`를 지원하는 Docker Compose 버전)
+- MT5 기능을 쓰려면 Windows + INFINOX MetaTrader 5 터미널
 
-**Docker가 필요한 작업**: 마이그레이션과 통합 테스트.
+**Redis는 선택 사항입니다.** 실행 경로는 PostgreSQL 아웃박스만 쓰므로 Redis 없이도 주문이 나갑니다.
+`.env`에 `REDIS_URL`이 있으면 헬스체크가 접속을 시도하니, 설치하지 않았다면 그 줄을 지우세요.
 
-**Docker 없이 되는 작업**: 콘솔 스텁 API, 웹 콘솔, 단위·API 테스트. 콘솔 화면만 확인하려면
-PostgreSQL과 Redis를 띄우지 않아도 됩니다.
+**PostgreSQL 없이 되는 작업**: 콘솔 스텁 API, 웹 콘솔, 단위·API 테스트, 전략 백테스트.
+
+`compose.yaml`은 개발 편의용입니다. 미니PC 배포에는 쓰지 않습니다 —
+[배포 절차서](docs/deployment/mini-pc.md)를 보세요.
 
 ## 로컬 시작
 
 1. `.env.example`을 `.env`로 복사하고 `INTERNAL_API_KEY`를 로컬 비밀값으로 바꿉니다.
-2. 의존 서비스를 시작하고 헬스체크를 기다립니다:
-   `docker compose up -d --wait db redis`.
-3. 잠긴 의존성을 설치합니다: `uv sync --all-groups --locked`.
-4. 데이터베이스 마이그레이션을 적용합니다: `uv run --env-file .env alembic upgrade head`.
+2. PostgreSQL을 준비합니다. 네이티브 설치라면 역할과 데이터베이스를 만듭니다:
+   ```powershell
+   $psql = "C:\Program Files\PostgreSQL\17\bin\psql.exe"
+   & $psql -U postgres -h localhost -c "CREATE ROLE mtoss LOGIN PASSWORD 'mtoss'"
+   & $psql -U postgres -h localhost -c "CREATE DATABASE mtoss OWNER mtoss"
+   ```
+   Docker를 쓴다면 `docker compose up -d --wait db` 로도 됩니다.
+3. 의존성을 설치합니다: `uv sync --all-groups`
+   (MT5 기능까지 쓰려면 Windows에서 `uv sync --all-groups --extra mt5`)
+4. 마이그레이션을 적용합니다: `uv run --env-file .env alembic upgrade head`
 5. API를 시작합니다:
-   `uv run --env-file .env uvicorn mtoss.api.app:create_app --factory --reload`.
+   `uv run --env-file .env uvicorn mtoss.api.app:create_app --factory --reload`
 
-Docker를 다른 위치에 노출하지 않았다면 `.env.example`의 로컬 URL을 그대로 사용하세요.
-`.env` 파일은 Git이 무시하며 실제 브로커 자격증명을 담아서는 안 됩니다.
+`.env` 파일은 Git이 무시하며 실제 브로커 자격증명이나 텔레그램 토큰을 커밋해서는 안 됩니다.
+
+## 전략 — UT Bot 2-포지션 분할
+
+TradingView Pine v6 전략을 파이썬으로 옮긴 것입니다. **XAUUSD+, H1** 기준.
+
+신호가 나면 주문 **2개**를 같은 방향으로 넣습니다.
+
+| | 손절 | 익절 | 성격 |
+|---|---|---|---|
+| **T1** | 최근 4봉 최저(롱)/최고(숏) | 손절폭 × `rr_mult` | 고정 1:1 |
+| **T2** | 같은 자리 | 없음 | 러너 |
+
+T1이 익절되면 T2의 손절을 **본절(진입가)** 로 올립니다. Hull 밴드 색이 뒤집히면 T2만 청산하고,
+반대 신호가 오면 전부 청산 후 반대 방향으로 재진입합니다.
+
+**헤징 계좌가 필수입니다.** 넷팅은 심볼당 순포지션 1개·SL/TP 1쌍뿐이라 서로 다른 손절을 동시에
+들 수 없습니다. 헤징이면 SL/TP가 브로커 서버에 걸려 **이 서버가 꺼져 있어도 손절이 작동합니다.**
+
+### 수량 산정
+
+```
+lots = (자본 × 리스크%) ÷ (R × 계약크기)      # R = |진입가 − 손절가|
+```
+
+`base_lots`(하한)와 `max_lots`(상한) 사이로 자르고 브로커 `volume_step`으로 **내림**합니다.
+최소 단위로도 예산을 넘으면 자동 진입하지 않고 **텔레그램으로 확인을 요청합니다.**
+무응답은 건너뛰기입니다.
+
+Pine과 의도적으로 다른 두 지점은 [trade_manager.py](src/mtoss/application/trade_manager.py) 상단에
+적혀 있습니다.
+
+## MT5 진단
+
+주문을 내지 않고 계좌·심볼 스펙만 읽습니다. 배포 전과 브로커 설정이 바뀔 때마다 돌리세요.
+
+```powershell
+uv run --extra mt5 python ops/mt5_probe.py
+```
+
+`margin_mode`, 금 심볼별 계약 크기·거래모드·`stops_level`·필링 모드, R별 랏 표,
+`order_check` 증거금, 서버 시각 오프셋을 출력합니다.
+
+> 서버 시각 오프셋은 **장중에만** 계산됩니다. 휴장 중에는 마지막 틱 시각이라 의미가 없습니다.
+
+## 텔레그램 알림
+
+`.env`에 `TELEGRAM_BOT_TOKEN`과 `TELEGRAM_CHAT_ID`를 넣으면 켜집니다. 만드는 방법은
+[배포 절차서 §7](docs/deployment/mini-pc.md#7-텔레그램)에 있습니다.
+
+**롱폴링(`getUpdates`)을 씁니다.** 웹훅과 달리 아웃바운드 HTTPS만 쓰므로 개방 포트가 필요 없습니다.
+
+`TELEGRAM_CHAT_ID`는 보안 장치입니다. 이 id에서 온 콜백만 받아들입니다 — 없으면 봇 이름을
+알아낸 누구나 실계좌 진입 버튼을 누를 수 있습니다.
 
 ## 웹 콘솔 실행
 
@@ -160,16 +243,22 @@ Invoke-RestMethod -Uri "http://127.0.0.1:8100/console/v1/dashboard" `
 
 ## 검사
 
-PostgreSQL과 Redis가 실행 중이고 마이그레이션이 적용된 상태에서 전체 스위트를 실행합니다.
+PostgreSQL이 실행 중이고 마이그레이션이 적용된 상태에서 전체 스위트를 실행합니다.
 
 ```shell
 uv run --env-file .env pytest tests -v
 ```
 
-CI가 사용하는 개별 검사는 다음과 같습니다.
+`tests/integration/test_redis_publisher.py`는 Redis를 요구합니다. Redis를 설치하지 않았다면
+그 파일만 빼면 나머지 통합 테스트는 전부 돕니다.
 
 ```shell
-uv run --env-file .env pytest tests/integration -v
+uv run --env-file .env pytest tests/integration -q --ignore=tests/integration/test_redis_publisher.py
+```
+
+PostgreSQL 없이 돌릴 수 있는 검사 (CI가 쓰는 것):
+
+```shell
 uv run --env-file .env pytest tests/unit tests/api -v
 uv run ruff check .
 uv run mypy src/mtoss
@@ -216,6 +305,28 @@ npm --prefix web run shots    # 스크린샷 저장
 아래의 일회용 데이터베이스를 사용합니다. 개발용 `mtoss` 데이터베이스와 분리되어 있으며,
 이 명령들이 삭제하는 유일한 데이터베이스입니다.
 
+**네이티브 PostgreSQL** (미니PC 구성):
+
+```powershell
+$psql = "C:\Program Files\PostgreSQL\17\bin\psql.exe"
+$env:PGPASSWORD = "<superpassword>"
+& $psql -U postgres -h localhost -c "DROP DATABASE IF EXISTS mtoss_ci_verify"
+& $psql -U postgres -h localhost -c "CREATE DATABASE mtoss_ci_verify OWNER mtoss"
+$env:PGPASSWORD = $null
+
+$env:DATABASE_URL = "postgresql+asyncpg://mtoss:mtoss@localhost:5432/mtoss_ci_verify"
+uv run --env-file .env alembic upgrade head
+uv run --env-file .env alembic downgrade base
+uv run --env-file .env alembic upgrade head
+$env:DATABASE_URL = $null
+
+$env:PGPASSWORD = "<superpassword>"
+& $psql -U postgres -h localhost -c "DROP DATABASE IF EXISTS mtoss_ci_verify"
+$env:PGPASSWORD = $null
+```
+
+아래는 Docker를 쓰는 개발 환경용입니다.
+
 Bash:
 
 ```bash
@@ -244,6 +355,11 @@ Remove-Item Env:DATABASE_URL
 위해 존재하며 왕복 검증이 끝나면 의도적으로 삭제됩니다.
 
 ## 백업과 복구
+
+> 아래는 **Docker를 쓰는 개발 환경** 절차입니다. 네이티브 PostgreSQL(미니PC)은
+> [배포 절차서 §10](docs/deployment/mini-pc.md#10-백업)을 보세요.
+>
+> 어느 쪽이든 원칙은 같습니다 — **복구를 실제로 테스트하기 전에는 백업이 아닙니다.**
 
 데이터베이스 볼륨을 제거할 수 있는 작업을 하기 전에 호스트 쪽 백업을 만드세요. `backups/`
 디렉터리는 Git이 무시하므로, 로컬 데이터가 중요하다면 그 내용을 별도로 보호하고 보관해야
@@ -279,6 +395,8 @@ uv run --env-file .env alembic upgrade head
 
 ## 중지와 볼륨 안전
 
+> Docker를 쓰는 개발 환경에만 해당합니다. 미니PC는 네이티브 PostgreSQL 서비스를 씁니다.
+
 일반적인 `docker compose down`은 컨테이너를 멈추고 제거하지만 이름이 지정된 `postgres_data`
 볼륨은 보존하므로 다음 시작 때 로컬 데이터베이스를 그대로 사용할 수 있습니다.
 `docker compose down -v`는 로컬 데이터베이스 볼륨을 영구적으로 삭제하며, 호스트 쪽 백업이
@@ -287,8 +405,23 @@ uv run --env-file .env alembic upgrade head
 
 ## 안전
 
-이 단계에는 `FakeBroker`만 있으므로 실주문을 낼 수 없습니다. 실제 브로커 자격증명을 설정하거나
-저장하거나 커밋하지 마세요.
+현재 MT5 어댑터 본체가 없어 실주문이 나가지 않습니다. 붙인 뒤에도 `MT5_SUBMIT_ENABLED`가
+기본값 `false`라 `order_send`만 차단된 섀도 모드로 돕니다 — 실계좌 전 마지막 안전장치입니다.
+
+실계좌에 켜기 전 반드시 있어야 하는 것은
+[배포 절차서 §12](docs/deployment/mini-pc.md#12-실계좌-전-필수-항목)에 정리돼 있습니다.
+
+브로커 비밀번호와 텔레그램 토큰은 가능하면 Windows 자격증명 관리자에 두고 `.env`에 남기지 마세요.
+어느 쪽이든 커밋해서는 안 됩니다.
+
+### 이 계좌에서 알고 있어야 할 숫자
+
+자본 $389.57, `XAUUSD+`는 100oz 계약이라 **0.01랏 = 1oz**입니다. 손절 시 손실이 곧 R달러입니다.
+최소 거래 단위가 이미 리스크 예산 근처라 **사이징이 수량을 줄일 여지가 거의 없습니다.**
+트레이드당 자본의 10~20%가 걸립니다.
+
+레버리지가 1:1000이라 증거금은 제약이 아닙니다(0.04랏에 $18). **브로커가 막아 주지 않는다는
+뜻**이고, `max_lots` 상한이 유일한 브레이크입니다.
 
 `UNKNOWN` 상태의 주문은 브로커 결과가 확정되지 않은 것이며 수동으로 정합성을 맞춰야 합니다.
 자동으로 재시도하거나 재전송해서는 안 됩니다.

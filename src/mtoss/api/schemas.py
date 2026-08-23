@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from mtoss.application.intent_service import CreateIntentCommand, IntentCreationResult
 from mtoss.domain.approvals import ApprovalMode, ApprovalPolicyConfig
-from mtoss.domain.enums import OrderSide
+from mtoss.domain.enums import OrderSide, OrderType
 from mtoss.domain.orders import validate_order_decimal_input
 from mtoss.domain.risk import RiskRule
 
@@ -33,8 +33,14 @@ class CreateIntentRequest(BaseModel):
     market: str = Field(max_length=16)
     symbol: str = Field(max_length=32)
     side: OrderSide
+    order_type: OrderType = OrderType.LIMIT
     quantity: Decimal
     limit_price: Decimal | None
+    reference_price: Decimal | None = None
+    stop_loss: Decimal | None = None
+    take_profit: Decimal | None = None
+    reduce_only: bool = False
+    tranche_ref: str | None = Field(default=None, max_length=16)
     currency: str = Field(max_length=8)
     expires_at: datetime
     account_capital: Decimal
@@ -48,6 +54,9 @@ class CreateIntentRequest(BaseModel):
     @field_validator(
         "quantity",
         "limit_price",
+        "reference_price",
+        "stop_loss",
+        "take_profit",
         "account_capital",
         "resulting_symbol_weight",
         "daily_loss",
@@ -62,7 +71,7 @@ class CreateIntentRequest(BaseModel):
         field_name = getattr(info, "field_name", "decimal")
         return _reject_inexact_or_non_finite(value, field_name)
 
-    @field_validator("quantity", "limit_price")
+    @field_validator("quantity", "limit_price", "reference_price", "stop_loss", "take_profit")
     @classmethod
     def require_exact_order_database_decimal(
         cls, value: Decimal | None, info: object
@@ -98,8 +107,13 @@ class CreateIntentResponse(BaseModel):
 
 
 def to_command(payload: CreateIntentRequest) -> CreateIntentCommand:
-    if payload.limit_price is None:
-        raise ValueError("Phase 1 requires limit_price")
+    if payload.order_type is OrderType.LIMIT and payload.limit_price is None:
+        raise ValueError("limit orders require limit_price")
+    if payload.order_type is OrderType.MARKET:
+        if payload.limit_price is not None:
+            raise ValueError("market orders must not carry a limit_price")
+        if payload.reference_price is None:
+            raise ValueError("market orders require reference_price for risk sizing")
     return CreateIntentCommand(
         account_id=payload.account_id,
         signal_id=payload.signal_id,
@@ -107,8 +121,14 @@ def to_command(payload: CreateIntentRequest) -> CreateIntentCommand:
         market=payload.market,
         symbol=payload.symbol,
         side=payload.side,
+        order_type=payload.order_type,
         quantity=payload.quantity,
         limit_price=payload.limit_price,
+        reference_price=payload.reference_price,
+        stop_loss=payload.stop_loss,
+        take_profit=payload.take_profit,
+        reduce_only=payload.reduce_only,
+        tranche_ref=payload.tranche_ref,
         currency=payload.currency,
         expires_at=payload.expires_at,
         account_capital=payload.account_capital,

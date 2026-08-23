@@ -117,11 +117,14 @@ def report_account() -> int | None:
 
 
 def find_gold_symbols() -> list[str]:
+    """XAUUSD 계열을 앞에 둔다. 알파벳순으로 자르면 정작 볼 심볼을 놓친다."""
     symbols = mt5.symbols_get()
     if symbols is None:
         return []
-    names = [item.name for item in symbols if "XAU" in item.name.upper()]
-    return sorted(names)
+    names = sorted(item.name for item in symbols if "XAU" in item.name.upper())
+    usd = [name for name in names if name.upper().startswith("XAUUSD")]
+    rest = [name for name in names if not name.upper().startswith("XAUUSD")]
+    return usd + rest
 
 
 def report_symbol(name: str, equity: float, currency: str) -> None:
@@ -193,9 +196,25 @@ def report_risk_table(info: Any, tick: Any, equity: float) -> None:
         )
 
 
+def preferred_filling(info: Any) -> int:
+    """심볼이 받는 필링 모드를 고른다.
+
+    지정하지 않으면 MT5가 FOK를 기본으로 쓰는데, 이 브로커의 금 심볼은 IOC만 받아
+    10030(Unsupported filling mode)이 난다. 어댑터도 반드시 이걸 골라 넣어야 한다.
+    """
+    if info.filling_mode & 2:
+        return int(mt5.ORDER_FILLING_IOC)
+    if info.filling_mode & 1:
+        return int(mt5.ORDER_FILLING_FOK)
+    return int(mt5.ORDER_FILLING_RETURN)
+
+
 def report_order_check(name: str, info: Any, tick: Any) -> None:
     """주문을 내지 않고 증거금과 수용 여부만 확인한다."""
     print("\n  order_check (전송 없음)")
+    if not tick.ask:
+        print("    호가 없음 — 주말 휴장이면 정상. 장 열린 뒤 다시 확인할 것.")
+        return
     for lots in (info.volume_min, 0.02):
         request = {
             "action": mt5.TRADE_ACTION_DEAL,
@@ -205,6 +224,7 @@ def report_order_check(name: str, info: Any, tick: Any) -> None:
             "price": tick.ask,
             "deviation": 20,
             "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": preferred_filling(info),
             "magic": 0,
         }
         result = mt5.order_check(request)
@@ -223,6 +243,9 @@ def report_server_time(name: str) -> None:
     section("서버 시각 오프셋")
     if tick is None:
         show("tick", f"None ({mt5.last_error()})")
+        return
+    if not tick.time:
+        show("서버 시각", "없음", "← 휴장 중이면 정상. 장 열린 뒤 다시 확인할 것.")
         return
     server = datetime.fromtimestamp(tick.time, tz=UTC)
     now = datetime.now(UTC)
@@ -245,7 +268,8 @@ def main() -> None:
         section("금 관련 심볼")
         print("  " + (", ".join(candidates) if candidates else "(없음)"))
 
-        for name in candidates[:5]:
+        wanted = [name for name in candidates if name.upper().startswith("XAUUSD")]
+        for name in wanted or candidates[:3]:
             report_symbol(name, equity, currency)
 
         if candidates:
